@@ -1,0 +1,35 @@
+{
+  "name": "meetresult",
+  "version": "1.0.0",
+  "description": "CLI untuk merekam, mentranskrip, dan merangkum rapat Microsoft Teams secara otomatis, terintegrasi dengan Outlook Calendar. Mendukung Bahasa Indonesia.",
+  "main": "src/cli.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aansun/MeetResult.git"
+  },
+  "bin": {
+    "meetresult": "./bin/meetresult.js"
+  },
+  "scripts": {
+    "start": "node bin/meetresult.js"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^2.9.2",
+    "axios": "^1.7.2",
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "docx": "^9.7.1",
+    "docxtemplater": "^3.69.3",
+    "dotenv": "^16.4.5",
+    "inquirer": "^8.2.6",
+    "node-cron": "^3.0.3",
+    "node-ical": "^0.27.1",
+    "open": "^8.4.2",
+    "ora": "^5.4.1",
+    "pizzip": "^3.2.0"
+  }
+}

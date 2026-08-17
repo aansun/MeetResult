@@ -1,0 +1,25 @@
+node_modules/
+.env
+*.log
+.DS_Store
+bin/meetresult-tray
+
+# Folder data/ berisi hasil runtime (audio, transkrip, notulen, database lokal) - JANGAN
+# di-commit. Aplikasi otomatis buat ulang folder ini + isinya saat pertama kali dijalankan.
+# Pola di bawah ditulis per-subfolder (bukan "data/" blanket) supaya file .gitkeep tetap
+# ter-track dan struktur foldernya utuh saat di-clone.
+data/*.json
+data/recordings/*
+data/transcripts/*
+data/summaries/*
+!data/recordings/.gitkeep
+!data/transcripts/.gitkeep
+!data/summaries/.gitkeep
+
+# Dokumen contoh/referensi asli (PDF/Word) yang di-drop ke folder Template/ mungkin berisi
+# data internal perusahaan (nama pegawai, nama project, dsb). Aturan di bawah otomatis
+# meng-ignore SEMUA file di Template/, KECUALI file "*_template.docx" (template generic
+# berisi tag placeholder, aman untuk di-publish/commit).
+Template/*
+!Template/*_template.docx
+!Template/.gitkeep
