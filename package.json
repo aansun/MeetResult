@@ -11,7 +11,8 @@
     "meetresult": "./bin/meetresult.js"
   },
   "scripts": {
-    "start": "node bin/meetresult.js"
+    "start": "node bin/meetresult.js",
+    "postinstall": "node scripts/postinstall.js"
   },
   "license": "MIT",
   "engines": {

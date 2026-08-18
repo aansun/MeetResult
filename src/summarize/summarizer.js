@@ -7,6 +7,7 @@ const { saveMomDocx } = require("./docxGenerator");
 const { renderFromTemplate } = require("./docxTemplateRenderer");
 const { buildUniqueFileName } = require("../utils/filename");
 const { askClaudeCli } = require("./claudeCliClient");
+const { askOpenAi } = require("./openaiClient");
 
 const structuredSchema = require("./schemas/structuredSchema");
 const meetingMinutesSchema = require("./schemas/meetingMinutesSchema");
@@ -84,19 +85,25 @@ async function callClaudeCli(systemPrompt, userPrompt) {
   return askClaudeCli(fullPrompt);
 }
 
-async function requestMomFromClaude(transcriptText, meetingMeta = {}) {
+async function requestMomFromAI(transcriptText, meetingMeta = {}) {
   const schema = getSchema();
+  const provider = config.ai.provider;
+  const providerDetail = provider === "claude" ? `claude/${config.claude.mode}` : provider;
 
   logger.info(
-    `Mengirim transkrip ke Claude (mode: ${config.claude.mode}, skema: ${config.mom.templateType}) untuk dibuatkan notulen...`
+    `Mengirim transkrip ke AI (provider: ${providerDetail}, skema: ${config.mom.templateType}) untuk dibuatkan notulen...`
   );
 
   const userPrompt = schema.buildUserPrompt(transcriptText, meetingMeta);
 
-  const text =
-    config.claude.mode === "api"
-      ? await callClaudeApi(schema.SYSTEM_PROMPT, userPrompt)
-      : await callClaudeCli(schema.SYSTEM_PROMPT, userPrompt);
+  let text;
+  if (provider === "openai") {
+    text = await askOpenAi(schema.SYSTEM_PROMPT, userPrompt);
+  } else if (config.claude.mode === "api") {
+    text = await callClaudeApi(schema.SYSTEM_PROMPT, userPrompt);
+  } else {
+    text = await callClaudeCli(schema.SYSTEM_PROMPT, userPrompt);
+  }
 
   return extractJson(text);
 }
@@ -108,7 +115,7 @@ async function requestMomFromClaude(transcriptText, meetingMeta = {}) {
 async function summarizeFile(transcriptFilePath, meetingMeta = {}) {
   const schema = getSchema();
   const transcriptText = fs.readFileSync(transcriptFilePath, "utf-8");
-  const momJson = await requestMomFromClaude(transcriptText, meetingMeta);
+  const momJson = await requestMomFromAI(transcriptText, meetingMeta);
 
   const media = meetingMeta.media || "Online Meeting - Microsoft Teams";
   const templateData = schema.mapToTemplateData(
@@ -157,4 +164,4 @@ async function summarizeFile(transcriptFilePath, meetingMeta = {}) {
   return outputPath;
 }
 
-module.exports = { summarizeFile, requestMomFromClaude };
+module.exports = { summarizeFile, requestMomFromAI };

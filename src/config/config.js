@@ -39,6 +39,14 @@ module.exports = {
     url: process.env.CALENDAR_ICS_URL || "",
   },
 
+  ai: {
+    // Provider yang dipakai untuk membuat notulen (teks transkrip -> JSON MoM):
+    // "claude" (default): pakai Claude, lihat konfigurasi `claude.*` di bawah
+    // "openai": pakai endpoint Chat Completions OpenAI-compatible, lihat `openai.*` di bawah -
+    //   bisa OpenAI cloud ATAU server LOKAL (Ollama/MLX/LM Studio) via OPENAI_BASE_URL
+    provider: (process.env.SUMMARY_PROVIDER || "claude").toLowerCase(),
+  },
+
   claude: {
     // "cli" (default): pakai Claude Code CLI yang sudah login (`claude login`), tanpa API key terpisah
     // "api": pakai Anthropic Messages API langsung, butuh ANTHROPIC_API_KEY
@@ -47,6 +55,16 @@ module.exports = {
     model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-latest",
     cliBin: process.env.CLAUDE_CLI_BIN || "claude",
     cliModel: process.env.CLAUDE_CLI_MODEL || "",
+  },
+
+  openai: {
+    // Base URL OpenAI-compatible - default ke OpenAI cloud, tapi bisa diarahkan ke server LOKAL
+    // yang expose endpoint yang sama, mis. Ollama (http://localhost:11434/v1), MLX/mlx-omni-server
+    // (http://localhost:10240/v1), atau LM Studio (http://localhost:1234/v1).
+    baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+    // Kosongkan jika server lokal tidak butuh autentikasi (umum untuk Ollama/MLX/LM Studio)
+    apiKey: process.env.OPENAI_API_KEY || "",
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
   },
 
   whisper: {

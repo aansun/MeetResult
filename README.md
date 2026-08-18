@@ -83,10 +83,14 @@ Isi `.env`:
 |---|---|
 | `AZURE_CLIENT_ID` | Client ID App Registration Azure AD (lihat langkah di bawah) |
 | `AZURE_TENANT_ID` | `common` (default) atau tenant ID organisasi kamu |
+| `SUMMARY_PROVIDER` | Provider AI untuk notulen: `claude` (default) atau `openai` (lihat [Setup Provider AI](#-setup-provider-ai-untuk-notulen)) |
 | `CLAUDE_MODE` | `cli` (default, pakai Claude Code yang sudah login, TANPA API key) atau `api` (pakai Anthropic API, berbayar per token) |
 | `CLAUDE_CLI_BIN` | Nama/path binary Claude Code CLI (default `claude`) |
 | `ANTHROPIC_API_KEY` | Hanya dipakai jika `CLAUDE_MODE=api`. Dari https://console.anthropic.com/settings/keys |
 | `ANTHROPIC_MODEL` | Hanya dipakai jika `CLAUDE_MODE=api`. Default `claude-3-5-sonnet-latest` |
+| `OPENAI_BASE_URL` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Default OpenAI cloud, atau arahkan ke server lokal (oMLX/Ollama/LM Studio) |
+| `OPENAI_API_KEY` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Kosongkan untuk server lokal yang tidak butuh auth |
+| `OPENAI_MODEL` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Nama model sesuai provider/server |
 | `WHISPER_MODEL` | `small` / `medium` / `large` (makin besar makin akurat, makin lambat) |
 | `WHISPER_BATCHED` | `true` (default) - percepat transkripsi 2-4x, penting untuk meeting panjang |
 | `WHISPER_BATCH_SIZE` | Default `8`. Kecilkan ke `4` kalau RAM terbatas (≤8GB) |
@@ -97,7 +101,44 @@ Isi `.env`:
 | `MOM_PREPARED_BY` | Nama yang tercantum di kolom "Disusun oleh" pada dokumen MoM |
 | `MOM_ORG_NAME` | Nama program/organisasi opsional yang tampil sebagai subjudul dokumen |
 
-### Setup Claude (mode CLI — default, direkomendasikan)
+### 🤖 Setup Provider AI untuk Notulen
+
+Step transkripsi (audio→teks) selalu pakai Whisper lokal — lihat catatan di [bagian bawah](#%EF%B8%8F-catatan-penting). Yang bisa dipilih providernya adalah step **notulen** (teks transkrip → JSON MoM), lewat `SUMMARY_PROVIDER` di `.env`:
+
+| `SUMMARY_PROVIDER` | Cocok untuk |
+|---|---|
+| `claude` (default) | Pakai Claude Code CLI (subscription, tanpa API key) atau Anthropic API |
+| `openai` | Pakai endpoint Chat Completions **OpenAI-compatible** — bisa **cloud** (OpenAI) atau **lokal** (oMLX, Ollama, LM Studio, vLLM, dll) |
+
+> **Auto-deteksi saat install**: `npm install` otomatis mengecek apakah ada server AI lokal aktif — **oMLX** (baca port & API key langsung dari `~/.omlx/settings.json`, jadi otomatis TERMASUK autentikasinya), **Ollama** (`:11434`), atau **LM Studio** (`:1234`). Kalau ketemu, `.env` langsung di-set `SUMMARY_PROVIDER=openai` + `OPENAI_BASE_URL` (+ `OPENAI_API_KEY` untuk oMLX) yang sesuai. Kalau server lokal baru dinyalakan setelah install, jalankan ulang deteksinya kapan saja:
+> ```bash
+> meetresult setup-ai
+> ```
+> Konfigurasi yang sudah pernah di-set manual tidak akan ditimpa kecuali pakai `meetresult setup-ai --force`.
+
+#### Opsi A — `openai` dengan server LOKAL (privasi, gratis, offline)
+
+1. Jalankan server OpenAI-compatible pilihanmu, misalnya:
+   - **oMLX** (Apple Silicon, https://omlx.app): jalankan app-nya, server otomatis aktif sesuai `~/.omlx/settings.json` (default port `8000`, butuh API key - lihat langkah 2)
+   - **Ollama**: `ollama serve` lalu `ollama pull llama3.1` (default port `11434`, tanpa API key)
+   - **LM Studio**: nyalakan "Local Server" dari app-nya (default port `1234`, tanpa API key)
+2. Jalankan `meetresult setup-ai` (atau install ulang) agar `.env` otomatis terisi (untuk oMLX, API key ikut otomatis terbaca), atau isi manual:
+   ```
+   SUMMARY_PROVIDER=openai
+   OPENAI_BASE_URL=http://localhost:11434/v1
+   OPENAI_MODEL=llama3.1
+   ```
+
+#### Opsi B — `openai` dengan cloud (OpenAI atau provider OpenAI-compatible lain)
+
+```
+SUMMARY_PROVIDER=openai
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+```
+
+#### Opsi C — `claude` (mode CLI — default, direkomendasikan)
 
 MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription kamu (Pro/Max/Team), sehingga **tidak perlu bayar API terpisah**.
 
@@ -179,6 +220,12 @@ Ikuti instruksi kode device yang muncul (buka browser, masukkan kode).
 
 ```bash
 meetresult devices
+```
+
+### Deteksi ulang server AI lokal untuk notulen (oMLX/Ollama/LM Studio)
+
+```bash
+meetresult setup-ai
 ```
 
 ### Lihat agenda meeting Teams

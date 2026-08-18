@@ -137,6 +137,35 @@ program
   });
 
 program
+  .command("setup-ai")
+  .description(
+    "Deteksi ulang server AI lokal (oMLX/Ollama/LM Studio) & set provider notulen otomatis ke .env"
+  )
+  .option("-f, --force", "Timpa SUMMARY_PROVIDER/OPENAI_BASE_URL walau sudah pernah di-set manual")
+  .action(async (opts) => {
+    const { autoConfigureLocalAi } = require("./utils/aiProviderSetup");
+    logger.info("Mengecek server AI lokal aktif (oMLX / Ollama :11434 / LM Studio :1234)...");
+    const result = await autoConfigureLocalAi({ force: opts.force });
+    if (result.status === "configured") {
+      logger.success(
+        `Terdeteksi ${result.name} di ${result.baseURL}. .env di-update: SUMMARY_PROVIDER=openai, OPENAI_BASE_URL=${result.baseURL}` +
+          (result.model ? `, OPENAI_MODEL=${result.model}` : "") +
+          "."
+      );
+    } else if (result.status === "not-found") {
+      logger.warn(
+        "Tidak ada server AI lokal terdeteksi di port default. Konfigurasi di .env tidak diubah."
+      );
+    } else if (result.status === "skipped-existing-config") {
+      logger.info(
+        "SUMMARY_PROVIDER/OPENAI_BASE_URL sudah pernah di-set manual di .env - tidak ditimpa. Pakai --force untuk timpa."
+      );
+    } else {
+      logger.warn("File .env.example tidak ditemukan, lewati.");
+    }
+  });
+
+program
   .command("devices")
   .description("Tampilkan daftar perangkat audio yang terdeteksi ffmpeg")
   .action(async () => {
