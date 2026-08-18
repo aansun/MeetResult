@@ -3,6 +3,7 @@ node_modules/
 *.log
 .DS_Store
 bin/meetresult-tray
+data/watcher.pid
 
 # Folder data/ berisi hasil runtime (audio, transkrip, notulen, database lokal) - JANGAN
 # di-commit. Aplikasi otomatis buat ulang folder ini + isinya saat pertama kali dijalankan.

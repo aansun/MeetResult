@@ -1,9 +1,12 @@
 import Cocoa
 
 // MeetResultTray — Menu bar indicator untuk aplikasi MeetResult
-// Icon: "MR" dengan titik status (hijau = berjalan, abu-abu = berhenti)
-// Menu: Start/Stop Watch (mode otomatis via kalender), Rekam Manual/Stop (di luar kalender),
-//       Buka Folder Notulen, Lihat Log, Keluar
+// Icon: "MR" dengan titik status (hijau = ada aktivitas berjalan, abu-abu = semua berhenti)
+// Menu (submenu per grup supaya ringkas):
+//   Watch ▸ (Status, Start, Stop)
+//   Rekam Manual ▸ (Status, Start, Stop)
+//   Event List ▸ (daftar meeting yang sudah terdeteksi/diproses, klik untuk buka notulen)
+//   Buka Notulen, Log Aktivitas, Cek Update, Keluar
 
 let fm = FileManager.default
 
@@ -20,18 +23,53 @@ let pidFile = dataDir + "/watcher.pid"
 let logFile = dataDir + "/watcher.log"
 let summariesDir = dataDir + "/summaries"
 let recordingStateFile = dataDir + "/recording-state.json"
+let dbFile = dataDir + "/db.json"
 let manualLogFile = dataDir + "/manual-record.log"
 let nodeBin = "node"
 let cliScript = "bin/meetresult.js"
 
+func statusIcon(_ status: String) -> String {
+    switch status {
+    case "scheduled": return "\u{1F5D3}\u{FE0F}"   // 🗓️
+    case "recording": return "\u{1F534}"           // 🔴
+    case "processing", "transcribed", "recorded": return "\u{23F3}" // ⏳
+    case "done": return "\u{2705}"                 // ✅
+    case "error": return "\u{26A0}\u{FE0F}"        // ⚠️
+    default: return "\u{2022}"
+    }
+}
+
+func formatShortDate(_ iso: String) -> String {
+    let isoFormatter = ISO8601DateFormatter()
+    isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    var date = isoFormatter.date(from: iso)
+    if date == nil {
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        date = isoFormatter.date(from: iso)
+    }
+    guard let d = date else { return iso }
+    let out = DateFormatter()
+    out.dateFormat = "d MMM, HH:mm"
+    out.locale = Locale(identifier: "id_ID")
+    return out.string(from: d)
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
-    var statusMenuItem: NSMenuItem!
-    var manualStatusMenuItem: NSMenuItem!
+
+    // Submenu Watch
+    var watchStatusItem: NSMenuItem!
     var startItem: NSMenuItem!
     var stopItem: NSMenuItem!
+
+    // Submenu Rekam Manual
+    var manualStatusMenuItem: NSMenuItem!
     var recordManualItem: NSMenuItem!
     var stopManualItem: NSMenuItem!
+
+    // Submenu Event List
+    var eventListMenu: NSMenu!
+
     var timer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -56,42 +94,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func buildMenu() {
         let menu = NSMenu()
 
-        // --- Status watcher (mode otomatis via kalender) ---
-        statusMenuItem = NSMenuItem(title: "Status Watch: Mengecek...", action: nil, keyEquivalent: "")
-        statusMenuItem.isEnabled = false
-        menu.addItem(statusMenuItem)
-        menu.addItem(NSMenuItem.separator())
+        // --- Submenu: Watch (mode otomatis via kalender) ---
+        let watchMenu = NSMenu()
+        watchStatusItem = NSMenuItem(title: "Status: Mengecek...", action: nil, keyEquivalent: "")
+        watchStatusItem.isEnabled = false
+        watchMenu.addItem(watchStatusItem)
+        watchMenu.addItem(NSMenuItem.separator())
 
-        startItem = NSMenuItem(title: "Start MeetResult (Watch)", action: #selector(startWatcher), keyEquivalent: "s")
+        startItem = NSMenuItem(title: "Start", action: #selector(startWatcher), keyEquivalent: "s")
         startItem.target = self
-        menu.addItem(startItem)
+        watchMenu.addItem(startItem)
 
-        stopItem = NSMenuItem(title: "Stop MeetResult", action: #selector(stopWatcher), keyEquivalent: "t")
+        stopItem = NSMenuItem(title: "Stop", action: #selector(stopWatcher), keyEquivalent: "t")
         stopItem.target = self
-        menu.addItem(stopItem)
+        watchMenu.addItem(stopItem)
 
-        menu.addItem(NSMenuItem.separator())
+        let watchMenuItem = NSMenuItem(title: "Watch", action: nil, keyEquivalent: "")
+        watchMenuItem.submenu = watchMenu
+        menu.addItem(watchMenuItem)
 
-        // --- Rekam manual (di luar kalender) ---
-        manualStatusMenuItem = NSMenuItem(title: "Rekam Manual: Mengecek...", action: nil, keyEquivalent: "")
+        // --- Submenu: Rekam Manual (di luar kalender) ---
+        let manualMenu = NSMenu()
+        manualStatusMenuItem = NSMenuItem(title: "Status: Mengecek...", action: nil, keyEquivalent: "")
         manualStatusMenuItem.isEnabled = false
-        menu.addItem(manualStatusMenuItem)
+        manualMenu.addItem(manualStatusMenuItem)
+        manualMenu.addItem(NSMenuItem.separator())
 
-        recordManualItem = NSMenuItem(title: "Rekam Manual (di luar kalender)...", action: #selector(startManualRecording), keyEquivalent: "r")
+        recordManualItem = NSMenuItem(title: "Start", action: #selector(startManualRecording), keyEquivalent: "r")
         recordManualItem.target = self
-        menu.addItem(recordManualItem)
+        manualMenu.addItem(recordManualItem)
 
-        stopManualItem = NSMenuItem(title: "Stop & Proses Notulen", action: #selector(stopManualRecording), keyEquivalent: "x")
+        stopManualItem = NSMenuItem(title: "Stop", action: #selector(stopManualRecording), keyEquivalent: "x")
         stopManualItem.target = self
-        menu.addItem(stopManualItem)
+        manualMenu.addItem(stopManualItem)
+
+        let manualMenuItem = NSMenuItem(title: "Rekam Manual", action: nil, keyEquivalent: "")
+        manualMenuItem.submenu = manualMenu
+        menu.addItem(manualMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        let openSummary = NSMenuItem(title: "Buka Folder Notulen (MoM)", action: #selector(openSummaryFolder), keyEquivalent: "o")
+        // --- Submenu: Event List ---
+        eventListMenu = NSMenu()
+        let eventListMenuItem = NSMenuItem(title: "Event List", action: nil, keyEquivalent: "")
+        eventListMenuItem.submenu = eventListMenu
+        menu.addItem(eventListMenuItem)
+        refreshEventList()
+
+        menu.addItem(NSMenuItem.separator())
+
+        let openSummary = NSMenuItem(title: "Buka Notulen", action: #selector(openSummaryFolder), keyEquivalent: "o")
         openSummary.target = self
         menu.addItem(openSummary)
 
-        let openLog = NSMenuItem(title: "Lihat Log Aktivitas", action: #selector(openLogFile), keyEquivalent: "l")
+        let openLog = NSMenuItem(title: "Log Aktivitas", action: #selector(openLogFile), keyEquivalent: "l")
         openLog.target = self
         menu.addItem(openLog)
 
@@ -108,6 +164,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         statusItem.menu = menu
+    }
+
+    // MARK: - Event List
+
+    /// Baca data/db.json, ambil daftar meeting terbaru (maks 15), tampilkan di submenu
+    /// "Event List". Meeting berstatus "done" bisa langsung diklik untuk buka notulennya.
+    func refreshEventList() {
+        eventListMenu.removeAllItems()
+
+        guard let data = fm.contents(atPath: dbFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let meetings = json["meetings"] as? [[String: Any]],
+              !meetings.isEmpty else {
+            let empty = NSMenuItem(title: "Belum ada event terdeteksi", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            eventListMenu.addItem(empty)
+            return
+        }
+
+        let sorted = meetings.sorted { (a, b) in
+            let sa = (a["start"] as? String) ?? ""
+            let sb = (b["start"] as? String) ?? ""
+            return sa > sb // terbaru dulu
+        }
+
+        for m in sorted.prefix(15) {
+            let subject = (m["subject"] as? String) ?? "(Tanpa judul)"
+            let status = (m["status"] as? String) ?? "unknown"
+            let start = (m["start"] as? String) ?? ""
+            let dateLabel = start.isEmpty ? "" : formatShortDate(start)
+            let icon = statusIcon(status)
+
+            let title = dateLabel.isEmpty ? "\(icon) \(subject)" : "\(icon) \(subject) — \(dateLabel)"
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+
+            if status == "done", let summaryFile = m["summaryFile"] as? String, fm.fileExists(atPath: summaryFile) {
+                item.action = #selector(openEventSummary(_:))
+                item.target = self
+                item.representedObject = summaryFile
+            } else {
+                item.isEnabled = false
+            }
+
+            eventListMenu.addItem(item)
+        }
+    }
+
+    @objc func openEventSummary(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
     // MARK: - Status checks
@@ -172,21 +278,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ))
         statusItem.button?.attributedTitle = attrTitle
 
-        statusMenuItem.title = running ? "Status Watch: Berjalan \u{2705}" : "Status Watch: Berhenti \u{26D4}\u{FE0F}"
+        watchStatusItem.title = running ? "Status: Berjalan \u{2705}" : "Status: Berhenti \u{26D4}\u{FE0F}"
         startItem.isEnabled = !running
         stopItem.isEnabled = running
 
         // Rekaman manual HARUS nonaktif kalau sedang ada rekaman aktif dari sumber manapun
         // (termasuk yang dipicu otomatis oleh watcher/kalender) - hanya 1 rekaman boleh berjalan.
         if isAutoTriggered {
-            manualStatusMenuItem.title = "Rekam Manual: Nonaktif (watcher sedang merekam meeting kalender) \u{1F512}"
+            manualStatusMenuItem.title = "Status: Terkunci (Watch merekam) \u{1F512}"
         } else if recordingActive {
-            manualStatusMenuItem.title = "Rekam Manual: Sedang Merekam \u{1F534}"
+            manualStatusMenuItem.title = "Status: Aktif \u{1F534}"
         } else {
-            manualStatusMenuItem.title = "Rekam Manual: Tidak Aktif"
+            manualStatusMenuItem.title = "Status: Tidak Aktif"
         }
         recordManualItem.isEnabled = !recordingActive
         stopManualItem.isEnabled = recordingActive
+
+        refreshEventList()
     }
 
     // MARK: - Helper: jalankan `meetresult <args...>` dengan PATH & cwd yang benar
@@ -231,15 +339,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatus()
     }
 
+    /// Stop watcher SEKALIGUS rekaman yang sedang berjalan (kalau ada dan dipicu otomatis
+    /// oleh watcher, BUKAN rekaman manual). Ini memperbaiki bug indikator: sebelumnya
+    /// mematikan proses watcher saja tanpa menghentikan rekaman yang masih berjalan di
+    /// belakang layar, sehingga titik status tetap hijau walau teks sudah "Berhenti".
     @objc func stopWatcher() {
-        guard let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
-              let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        let wasRunning = isRunning()
+
+        if let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
+           let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            kill(pid, SIGTERM)
+            try? fm.removeItem(atPath: pidFile)
+        }
+
+        // Kalau ada rekaman aktif yang dipicu otomatis oleh watcher (bukan manual),
+        // hentikan juga sekalian proses & buat notulennya (pakai `meetresult stop`).
+        let activeId = activeRecordingMeetingId()
+        let isAutoTriggered = isAnyRecordingActive() && !(activeId?.hasPrefix("manual-") ?? false)
+        if isAutoTriggered {
+            let task = buildMeetResultTask(["stop"], logPath: logFile)
+            try? task.run()
+            showNotification(
+                title: "MeetResult",
+                message: "Watch dihentikan. Rekaman yang sedang berjalan juga dihentikan & sedang diproses..."
+            )
+        }
+
+        if !wasRunning && !isAutoTriggered {
             updateStatus()
             return
         }
-        kill(pid, SIGTERM)
-        try? fm.removeItem(atPath: pidFile)
-        updateStatus()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.updateStatus()
+        }
     }
 
     // MARK: - Rekam manual (di luar kalender)
@@ -250,8 +383,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             showAlert(
                 title: "Tidak Bisa Mulai Rekam Manual",
                 message: autoTriggered
-                    ? "Watcher sedang merekam meeting dari kalender. Hentikan dulu ('Stop MeetResult' atau tunggu selesai) sebelum mulai rekam manual - hanya 1 rekaman yang boleh berjalan bersamaan."
-                    : "Sudah ada rekaman manual yang sedang berjalan. Hentikan dulu lewat 'Stop & Proses Notulen'."
+                    ? "Watch sedang merekam meeting dari kalender. Hentikan dulu (Watch > Stop) sebelum mulai rekam manual - hanya 1 rekaman yang boleh berjalan bersamaan."
+                    : "Sudah ada rekaman manual yang sedang berjalan. Hentikan dulu lewat menu Rekam Manual > Stop."
             )
             updateStatus()
             return
@@ -346,21 +479,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try task.run()
         } catch {
-            showAlert(title: "Cek Update Gagal", message: error.localizedDescription)
+            showAlert(title: "Cek Update", message: "Gagal cek update: \(error.localizedDescription)")
             return
         }
 
         task.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        var output = String(data: data, encoding: .utf8) ?? ""
-        // Bersihkan warning teknis Node.js yang tidak relevan buat user
-        output = output
-            .components(separatedBy: "\n")
-            .filter { !$0.contains("ExperimentalWarning") && !$0.contains("trace-warnings") }
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let output = String(data: data, encoding: .utf8) ?? ""
 
-        showAlert(title: "Cek Update MeetResult", message: output.isEmpty ? "Tidak ada output." : output)
+        // Ringkas jadi 1 kalimat hasil saja, bukan dump log mentah.
+        let resultMessage: String
+        if output.contains("Sudah versi terbaru") {
+            resultMessage = "Sudah pakai versi terbaru \u{2705}"
+        } else if output.contains("Update tersedia") {
+            resultMessage = "Ada update baru tersedia! Jalankan 'meetresult update --apply' di terminal untuk memperbarui."
+        } else if output.contains("Gagal") || output.contains("Error") {
+            resultMessage = "Gagal cek update. Pastikan koneksi internet aktif."
+        } else {
+            resultMessage = "Tidak dapat menentukan status update."
+        }
+
+        showAlert(title: "Cek Update", message: resultMessage)
     }
 
     func showAlert(title: String, message: String) {

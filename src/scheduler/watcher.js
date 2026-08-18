@@ -9,8 +9,48 @@ const { cleanupOldRecordings } = require("../utils/retention");
 
 let stopTimer = null;
 
+/**
+ * Hentikan rekaman aktif untuk 1 meeting record, gabungkan audio, lalu lanjut ke
+ * pipeline transkrip+notulen. Dipakai baik oleh setTimeout auto-stop (fast path)
+ * maupun oleh mekanisme reconcile di checkAndAct() (jaring pengaman).
+ */
+async function stopActiveRecording(record) {
+  logger.info(`Waktu rapat "${record.subject}" selesai, menghentikan rekaman otomatis...`);
+  const state = recorder.stopRecording();
+  if (state) {
+    const finalAudioFile = await recorder.finalizeRecording(state);
+    if (finalAudioFile) {
+      db.updateMeeting(record.id, { audioFile: finalAudioFile });
+    }
+  }
+  await finishAndProcess(record.id);
+}
+
 async function checkAndAct() {
   try {
+    // --- Reconcile / jaring pengaman ---
+    // Cek apakah ada rekaman aktif yang SEHARUSNYA sudah berhenti (sudah lewat jadwal
+    // selesai meeting), tapi timer auto-stop-nya "hilang" - ini bisa terjadi kalau proses
+    // watcher sempat restart di tengah rekaman (mis. Mac restart, tray di-restart manual,
+    // atau proses crash), karena setTimeout hanya hidup selama proses Node itu berjalan.
+    // Dengan cek ini di SETIAP siklus polling (bukan cuma sekali via setTimeout), rekaman
+    // yang "ketinggalan" akan otomatis dihentikan maksimal dalam WATCH_INTERVAL_MINUTES,
+    // bukan berjalan terus tanpa batas.
+    if (recorder.isRecording()) {
+      const activeId = recorder.getActiveMeetingId();
+      const activeRecord = activeId ? db.getMeeting(activeId) : null;
+      if (activeRecord && activeRecord.status === "recording" && activeRecord.end) {
+        const endMs = new Date(activeRecord.end).getTime();
+        const graceMs = 60 * 1000; // buffer 1 menit, sama seperti jadwal auto-stop normal
+        if (Date.now() >= endMs + graceMs) {
+          logger.warn(
+            `Rekaman "${activeRecord.subject}" melewati jadwal selesai (kemungkinan timer auto-stop hilang karena watcher sempat restart) - menghentikan sekarang.`
+          );
+          await stopActiveRecording(activeRecord);
+        }
+      }
+    }
+
     const meetings = await getUpcomingTeamsMeetings({
       minutesAhead: config.watch.leadMinutes + config.watch.intervalMinutes + 5,
     });
@@ -53,19 +93,14 @@ async function checkAndAct() {
           recordingStartedAt: new Date().toISOString(),
         });
 
-        // Jadwalkan auto-stop tepat saat waktu selesai meeting (+ buffer 1 menit)
+        // Jadwalkan auto-stop tepat saat waktu selesai meeting (+ buffer 1 menit) - ini
+        // "fast path" (stop tepat waktu tanpa nunggu siklus polling berikutnya). Kalau proses
+        // watcher restart sebelum timer ini sempat jalan, mekanisme reconcile di atas akan
+        // jadi jaring pengaman (stop maksimal telat WATCH_INTERVAL_MINUTES).
         const stopInMs = endMs - now + 60 * 1000;
         setTimeout(async () => {
           if (recorder.getActiveMeetingId() === record.id) {
-            logger.info(`Waktu rapat "${m.subject}" selesai, menghentikan rekaman otomatis...`);
-            const state = recorder.stopRecording();
-            if (state) {
-              const finalAudioFile = await recorder.finalizeRecording(state);
-              if (finalAudioFile) {
-                db.updateMeeting(record.id, { audioFile: finalAudioFile });
-              }
-            }
-            finishAndProcess(record.id);
+            await stopActiveRecording(record);
           }
         }, Math.max(stopInMs, 5000));
       }
