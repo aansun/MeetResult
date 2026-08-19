@@ -39,15 +39,16 @@ func statusIcon(_ status: String) -> String {
     }
 }
 
-func formatShortDate(_ iso: String) -> String {
+func parseIsoDate(_ iso: String) -> Date? {
     let isoFormatter = ISO8601DateFormatter()
     isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    var date = isoFormatter.date(from: iso)
-    if date == nil {
-        isoFormatter.formatOptions = [.withInternetDateTime]
-        date = isoFormatter.date(from: iso)
-    }
-    guard let d = date else { return iso }
+    if let d = isoFormatter.date(from: iso) { return d }
+    isoFormatter.formatOptions = [.withInternetDateTime]
+    return isoFormatter.date(from: iso)
+}
+
+func formatShortDate(_ iso: String) -> String {
+    guard let d = parseIsoDate(iso) else { return iso }
     let out = DateFormatter()
     out.dateFormat = "d MMM, HH:mm"
     out.locale = Locale(identifier: "id_ID")
@@ -168,8 +169,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Event List
 
-    /// Baca data/db.json, ambil daftar meeting terbaru (maks 15), tampilkan di submenu
-    /// "Event List". Meeting berstatus "done" bisa langsung diklik untuk buka notulennya.
+    /// Baca data/db.json, ambil meeting yang jadwalnya HARI INI saja (maks 15, urut kronologis),
+    /// tampilkan di submenu "Event List". Meeting berstatus "done" bisa langsung diklik untuk
+    /// buka notulennya.
     func refreshEventList() {
         eventListMenu.removeAllItems()
 
@@ -183,10 +185,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let sorted = meetings.sorted { (a, b) in
+        let todaysMeetings = meetings.filter { m in
+            guard let start = m["start"] as? String, let date = parseIsoDate(start) else { return false }
+            return Calendar.current.isDateInToday(date)
+        }
+
+        guard !todaysMeetings.isEmpty else {
+            let empty = NSMenuItem(title: "Tidak ada event hari ini", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            eventListMenu.addItem(empty)
+            return
+        }
+
+        let sorted = todaysMeetings.sorted { (a, b) in
             let sa = (a["start"] as? String) ?? ""
             let sb = (b["start"] as? String) ?? ""
-            return sa > sb // terbaru dulu
+            return sa < sb // urut kronologis (pagi -> malam)
         }
 
         for m in sorted.prefix(15) {
