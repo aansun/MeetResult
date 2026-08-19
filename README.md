@@ -207,6 +207,19 @@ Gunakan jika butuh deteksi jadwal lebih real-time / data lebih lengkap.
 7. Untuk akun kantor (Office 365 organisasi), izin `Calendars.Read` biasanya tidak butuh admin consent, tapi tergantung kebijakan IT masing-masing perusahaan
 8. Jalankan `meetresult login` sebelum pakai `agenda`/`watch`
 
+### 🛡️ Deteksi Meeting Aktif (mencegah auto-record yang bukan meeting)
+
+Auto-record dipicu murni berdasarkan **jadwal kalender** (jam mulai–selesai), BUKAN status call Teams yang sebenarnya. Kalau event kalender masih ada tapi meeting-nya sebenarnya di-cancel/reschedule/tidak jadi, tanpa proteksi ini mic akan tetap merekam apapun yang terjadi di dekatnya selama window jadwal tersebut — termasuk percakapan pribadi di luar meeting.
+
+Dua lapis proteksi otomatis aktif secara default:
+
+1. **Cek Teams berjalan sebelum mulai** (`REQUIRE_TEAMS_RUNNING=true`, default) — kalau aplikasi Microsoft Teams sama sekali tidak dibuka saat jadwal mulai, auto-record dibatalkan (meeting ditandai status `skipped`).
+2. **Cek ulang aktivitas audio setelah beberapa menit** (`SILENCE_CHECK_AFTER_MINUTES=5`, default) — kalau di menit ke-5 Teams TIDAK berjalan **dan** channel audio system (BlackHole, suara lawan bicara) diam total sejak mulai rekam, rekaman dihentikan otomatis dan **tidak diproses** (skip transkrip+notulen, hemat biaya AI & mencegah percakapan pribadi ikut dirangkum). File audio & transkrip yang sudah sempat terekam tetap disimpan (ikut retensi normal) untuk referensi manual kalau ternyata false-positive.
+
+Kedua sinyal (Teams tidak jalan **dan** audio diam) harus sama-sama terpenuhi sebelum rekaman dihentikan — supaya meeting asli yang cuma hening di awal (nunggu peserta join, dsb) tidak salah dibuang. Set salah satu ke `false`/`0` di `.env` untuk menonaktifkan.
+
+> Proteksi ini **tidak berlaku** untuk rekam manual (`meetresult record`) — itu selalu keputusan eksplisit kamu.
+
 ## 🚀 Cara Pakai
 
 ### Login ke Outlook

@@ -97,6 +97,23 @@ module.exports = {
     leadMinutes: Number(process.env.RECORD_LEAD_MINUTES || 1),
   },
 
+  detection: {
+    // Cek apakah Microsoft Teams sedang berjalan SEBELUM mulai auto-record - kalau tidak
+    // jalan sama sekali saat jadwal mulai, auto-record DIBATALKAN (kemungkinan meeting
+    // di-cancel/reschedule tapi event lama masih ada di kalender). Tidak berlaku untuk
+    // rekam manual (`meetresult record`) - itu selalu keputusan eksplisit user.
+    requireTeamsRunning: (process.env.REQUIRE_TEAMS_RUNNING || "true") === "true",
+    // Berapa menit setelah mulai rekam, cek ULANG apakah channel audio Teams (system/
+    // BlackHole) benar-benar ada suara. Kalau di menit itu Teams TIDAK berjalan DAN audio
+    // diam total sejak mulai - rekaman dihentikan otomatis & TIDAK diproses (skip
+    // transkrip+notulen), mencegah percakapan pribadi di luar meeting ikut terekam &
+    // dirangkum AI. Set ke 0 untuk nonaktifkan cek ini.
+    silenceCheckAfterMinutes: Number(process.env.SILENCE_CHECK_AFTER_MINUTES || 5),
+    // Ambang batas dianggap "diam" dalam dBFS (makin negatif = makin sensitif/gampang
+    // dianggap ada suara). Default -50dB cukup aman untuk suara percakapan normal.
+    silenceThresholdDb: Number(process.env.SILENCE_THRESHOLD_DB || -50),
+  },
+
   retention: {
     // Berapa hari file audio hasil rekaman disimpan sebelum dihapus otomatis
     audioDays: Number(process.env.AUDIO_RETENTION_DAYS || 3),

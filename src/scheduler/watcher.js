@@ -6,8 +6,66 @@ const recorder = require("../recorder/recorder");
 const { getUpcomingTeamsMeetings } = require("../calendar");
 const { runPipelineForMeeting } = require("../pipeline");
 const { cleanupOldRecordings } = require("../utils/retention");
+const { isTeamsRunning } = require("../utils/teamsDetect");
+const { hasRecentAudioActivity } = require("../utils/audioActivity");
 
 let stopTimer = null;
+
+/**
+ * Hentikan rekaman aktif TANPA lanjut ke transkrip+notulen - dipakai saat mekanisme deteksi
+ * (lihat scheduleSilenceCheck()) menyimpulkan ini kemungkinan besar BUKAN meeting aktif,
+ * supaya percakapan pribadi/audio di luar meeting tidak ikut ditranskrip & dirangkum AI.
+ * File audio & transkrip tetap tersimpan (mengikuti retensi normal) untuk referensi manual.
+ */
+async function stopAndDiscardRecording(record, reason) {
+  logger.warn(`Rekaman "${record.subject}" dihentikan otomatis: ${reason}`);
+  const state = recorder.stopRecording();
+  if (state) {
+    const finalAudioFile = await recorder.finalizeRecording(state);
+    if (finalAudioFile) {
+      db.updateMeeting(record.id, { audioFile: finalAudioFile });
+    }
+  }
+  db.updateMeeting(record.id, { status: "skipped", skipReason: reason });
+}
+
+/**
+ * Jadwalkan 1x pengecekan di menit ke-N setelah rekaman mulai (config.detection.
+ * silenceCheckAfterMinutes): kalau Microsoft Teams TIDAK berjalan DAN channel audio system
+ * (BlackHole, suara Teams) diam total sejak mulai rekam - kemungkinan besar bukan meeting
+ * aktif, hentikan & buang (jangan diproses). Kedua sinyal harus SAMA-SAMA menunjukkan "tidak
+ * aktif" supaya meeting asli yang cuma hening di awal (nunggu peserta join, dsb) tidak
+ * salah dihentikan.
+ */
+function scheduleSilenceCheck(record, state, stopInMs) {
+  const minutes = config.detection.silenceCheckAfterMinutes;
+  if (!minutes || minutes <= 0) return;
+
+  const checkInMs = Math.min(minutes * 60 * 1000, Math.max(stopInMs - 30000, 10000));
+
+  setTimeout(async () => {
+    if (recorder.getActiveMeetingId() !== record.id) return; // sudah berhenti lebih dulu
+
+    const teamsRunning = isTeamsRunning();
+    const systemFile = state?.tempFiles?.system;
+    const activity = systemFile
+      ? hasRecentAudioActivity(systemFile, {
+          lookbackSeconds: minutes * 60,
+          thresholdDb: config.detection.silenceThresholdDb,
+        })
+      : null;
+    // Kalau belum bisa dicek (mode single, atau file belum cukup data), JANGAN anggap diam -
+    // lebih aman biarkan rekaman lanjut daripada salah membuang meeting yang asli.
+    const audioSilent = activity ? activity.isSilent : false;
+
+    if (!teamsRunning && audioSilent) {
+      await stopAndDiscardRecording(
+        record,
+        `Microsoft Teams tidak berjalan & tidak ada aktivitas audio meeting selama ${minutes} menit pertama - kemungkinan besar bukan meeting aktif.`
+      );
+    }
+  }, checkInMs);
+}
 
 /**
  * Hentikan rekaman aktif untuk 1 meeting record, gabungkan audio, lalu lanjut ke
@@ -85,6 +143,20 @@ async function checkAndAct() {
         !recorder.isRecording();
 
       if (shouldStart) {
+        // Gate: kalau Teams sama sekali tidak berjalan saat jadwal mulai, kemungkinan besar
+        // meeting ini di-cancel/reschedule tapi event lama masih ada di kalender - batalkan
+        // auto-record daripada merekam apapun yang kebetulan terjadi di dekat mic.
+        if (config.detection.requireTeamsRunning && !isTeamsRunning()) {
+          logger.warn(
+            `Meeting "${m.subject}" dijadwalkan mulai, tapi Microsoft Teams tidak sedang berjalan - auto-record dibatalkan.`
+          );
+          db.updateMeeting(record.id, {
+            status: "skipped",
+            skipReason: "Microsoft Teams tidak berjalan saat jadwal mulai",
+          });
+          continue;
+        }
+
         logger.title(`MULAI REKAM: ${m.subject}`);
         const outputFile = recorder.startRecording(record.id, m.subject);
         db.updateMeeting(record.id, {
@@ -103,6 +175,8 @@ async function checkAndAct() {
             await stopActiveRecording(record);
           }
         }, Math.max(stopInMs, 5000));
+
+        scheduleSilenceCheck(record, recorder.getActiveState(), Math.max(stopInMs, 5000));
       }
     }
   } catch (err) {

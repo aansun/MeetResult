@@ -269,6 +269,7 @@ program
             `  [${statusColor(m.status)}]\n` +
             `   ID: ${m.id}\n` +
             `   Mulai: ${m.start || "-"}\n` +
+            (m.skipReason ? `   Alasan dilewati: ${m.skipReason}\n` : "") +
             (m.summaryFile ? `   Notulen: ${m.summaryFile}\n` : "") +
             (m.transcriptFile ? `   Transkrip: ${m.transcriptFile}\n` : "")
         );
@@ -444,6 +445,7 @@ function statusColor(status) {
     transcribed: chalk.blue("ditranskrip"),
     done: chalk.green("selesai"),
     error: chalk.red("error"),
+    skipped: chalk.gray("dilewati (bukan meeting aktif)"),
   };
   return map[status] || status;
 }

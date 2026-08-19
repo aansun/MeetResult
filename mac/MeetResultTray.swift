@@ -36,6 +36,7 @@ func statusIcon(_ status: String) -> String {
     case "processing", "transcribed", "recorded": return "\u{23F3}" // ⏳
     case "done": return "\u{2705}"                 // ✅
     case "error": return "\u{26A0}\u{FE0F}"        // ⚠️
+    case "skipped": return "\u{1F6AB}"             // 🚫
     default: return "\u{2022}"
     }
 }

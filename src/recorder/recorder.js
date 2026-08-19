@@ -280,12 +280,22 @@ function getActiveMeetingId() {
   return state ? state.meetingId : null;
 }
 
+/**
+ * State lengkap perekaman yang sedang aktif (termasuk tempFiles.mic/system untuk mode dual),
+ * atau null kalau tidak ada. Dipakai mis. untuk cek aktivitas audio channel system secara
+ * langsung dari file .wav yang sedang ditulis (lihat utils/audioActivity.js).
+ */
+function getActiveState() {
+  return readState();
+}
+
 module.exports = {
   startRecording,
   stopRecording,
   finalizeRecording,
   isRecording,
   getActiveMeetingId,
+  getActiveState,
   listDevices,
   mergeAudioFiles,
 };
