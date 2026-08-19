@@ -23,7 +23,7 @@ program
   .description(
     "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis (mirip Krisp.ai), Bahasa Indonesia."
   )
-  .version("1.1.0");
+  .version("1.2.0");
 
 program
   .command("login")
