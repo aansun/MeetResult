@@ -20,6 +20,7 @@ let projectDir: String = {
 
 let dataDir = projectDir + "/data"
 let pidFile = dataDir + "/watcher.pid"
+let watcherMetaFile = dataDir + "/watcher-meta.json"
 let logFile = dataDir + "/watcher.log"
 let summariesDir = dataDir + "/summaries"
 let recordingStateFile = dataDir + "/recording-state.json"
@@ -62,6 +63,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var watchStatusItem: NSMenuItem!
     var startItem: NSMenuItem!
     var stopItem: NSMenuItem!
+    var restartStaleSeparator: NSMenuItem!
+    var restartStaleItem: NSMenuItem!
+    var hasNotifiedStale = false
 
     // Submenu Rekam Manual
     var manualStatusMenuItem: NSMenuItem!
@@ -109,6 +113,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stopItem = NSMenuItem(title: "Stop", action: #selector(stopWatcher), keyEquivalent: "t")
         stopItem.target = self
         watchMenu.addItem(stopItem)
+
+        // Muncul HANYA kalau watcher yang jalan masih pakai kode lama (source code berubah
+        // setelah proses ini start) - lihat isWatcherCodeStale(). Restart TIDAK memutus
+        // rekaman yang sedang berjalan (ffmpeg jalan sebagai proses detached terpisah).
+        restartStaleSeparator = NSMenuItem.separator()
+        restartStaleSeparator.isHidden = true
+        watchMenu.addItem(restartStaleSeparator)
+
+        restartStaleItem = NSMenuItem(
+            title: "\u{26A0}\u{FE0F} Kode berubah - Restart Sekarang",
+            action: #selector(restartWatcher),
+            keyEquivalent: ""
+        )
+        restartStaleItem.target = self
+        restartStaleItem.isHidden = true
+        watchMenu.addItem(restartStaleItem)
 
         let watchMenuItem = NSMenuItem(title: "Watch", action: nil, keyEquivalent: "")
         watchMenuItem.submenu = watchMenu
@@ -271,11 +291,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return json["meetingId"] as? String
     }
 
+    /// Waktu proses watcher yang SEDANG jalan mulai di-start, dari data/watcher-meta.json
+    /// (ditulis oleh `meetresult watch` sendiri). nil kalau file tidak ada (mis. watcher
+    /// distart oleh versi lama sebelum fitur ini, atau memang tidak sedang jalan).
+    func watcherStartedAt() -> Date? {
+        guard let data = fm.contents(atPath: watcherMetaFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let iso = json["startedAt"] as? String else { return nil }
+        return parseIsoDate(iso)
+    }
+
+    /// Waktu modifikasi TERBARU di antara semua file .js di src/ & bin/ - dipakai sebagai
+    /// proxy "kapan source code terakhir berubah", baik lewat `git pull` (meetresult update)
+    /// maupun edit manual.
+    func latestSourceMtime() -> Date? {
+        var latest: Date? = nil
+        for subdir in ["src", "bin"] {
+            let dir = projectDir + "/" + subdir
+            guard let enumerator = fm.enumerator(atPath: dir) else { continue }
+            while let file = enumerator.nextObject() as? String {
+                guard file.hasSuffix(".js") else { continue }
+                guard let attrs = try? fm.attributesOfItem(atPath: dir + "/" + file),
+                      let modDate = attrs[.modificationDate] as? Date else { continue }
+                if latest == nil || modDate > latest! { latest = modDate }
+            }
+        }
+        return latest
+    }
+
+    /// true kalau ada file source yang berubah SETELAH proses watcher yang sedang jalan
+    /// di-start - artinya proses itu masih pakai kode LAMA di memori (Node.js tidak reload
+    /// otomatis) dan perlu di-restart supaya perubahan (termasuk bugfix) benar-benar aktif.
+    func isWatcherCodeStale() -> Bool {
+        guard isRunning() else { return false }
+        guard let startedAt = watcherStartedAt(), let latestSrc = latestSourceMtime() else { return false }
+        return latestSrc > startedAt
+    }
+
     func updateStatus() {
         let running = isRunning()
         let recordingActive = isAnyRecordingActive()
         let activeId = activeRecordingMeetingId()
         let isAutoTriggered = recordingActive && !(activeId?.hasPrefix("manual-") ?? false)
+        let stale = isWatcherCodeStale()
 
         let attrTitle = NSMutableAttributedString()
         let dotColor: NSColor = (running || recordingActive) ? .systemGreen : .systemGray
@@ -284,7 +342,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             attributes: [.foregroundColor: dotColor]
         ))
         attrTitle.append(NSAttributedString(
-            string: "MR",
+            string: stale ? "MR \u{26A0}\u{FE0F}" : "MR",
             attributes: [
                 .foregroundColor: NSColor.labelColor,
                 .font: NSFont.menuBarFont(ofSize: 13)
@@ -292,9 +350,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ))
         statusItem.button?.attributedTitle = attrTitle
 
-        watchStatusItem.title = running ? "Status: Berjalan \u{2705}" : "Status: Berhenti \u{26D4}\u{FE0F}"
+        watchStatusItem.title = running
+            ? (stale ? "Status: Berjalan, kode berubah \u{26A0}\u{FE0F}" : "Status: Berjalan \u{2705}")
+            : "Status: Berhenti \u{26D4}\u{FE0F}"
         startItem.isEnabled = !running
         stopItem.isEnabled = running
+        restartStaleSeparator.isHidden = !stale
+        restartStaleItem.isHidden = !stale
+
+        if stale {
+            if !hasNotifiedStale {
+                hasNotifiedStale = true
+                showNotification(
+                    title: "MeetResult",
+                    message: "Ada perubahan kode terbaru - restart Watch supaya perbaikan/fitur terbaru aktif (menu Watch > Restart Sekarang)."
+                )
+            }
+        } else {
+            hasNotifiedStale = false
+        }
 
         // Rekaman manual HARUS nonaktif kalau sedang ada rekaman aktif dari sumber manapun
         // (termasuk yang dipicu otomatis oleh watcher/kalender) - hanya 1 rekaman boleh berjalan.
@@ -386,6 +460,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.updateStatus()
+        }
+    }
+
+    /// Restart proses watcher supaya source code TERBARU kepakai (lihat isWatcherCodeStale()) -
+    /// BEDA dari stopWatcher(): TIDAK menyentuh rekaman yang sedang aktif sama sekali, karena
+    /// ffmpeg jalan sebagai proses detached terpisah dari watcher (lihat recorder.js) - proses
+    /// watcher yang baru akan otomatis mengenali rekaman itu lagi lewat mekanisme reconcile
+    /// di checkAndAct() pada siklus polling pertamanya.
+    @objc func restartWatcher() {
+        if let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
+           let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            kill(pid, SIGTERM)
+        }
+        try? fm.removeItem(atPath: pidFile)
+        try? fm.removeItem(atPath: watcherMetaFile)
+        hasNotifiedStale = false
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.startWatcher()
+            self?.showNotification(title: "MeetResult", message: "Watch berhasil di-restart dengan kode terbaru.")
         }
     }
 

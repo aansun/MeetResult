@@ -77,11 +77,21 @@ program
   )
   .action(() => {
     const pidFile = path.join(config.DATA_DIR, "watcher.pid");
+    const metaFile = path.join(config.DATA_DIR, "watcher-meta.json");
     fs.writeFileSync(pidFile, String(process.pid), "utf-8");
+    // Dicatat supaya tray bisa deteksi kalau source code (src/**, bin/**) berubah SETELAH
+    // proses watcher ini start - Node.js hanya baca file sekali saat start, jadi proses yang
+    // sudah lama jalan tidak akan otomatis pakai kode terbaru sampai di-restart manual.
+    fs.writeFileSync(
+      metaFile,
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2),
+      "utf-8"
+    );
 
     const cleanupPid = () => {
       try {
         if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
+        if (fs.existsSync(metaFile)) fs.unlinkSync(metaFile);
       } catch (e) {}
     };
     process.on("exit", cleanupPid);
