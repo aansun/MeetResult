@@ -5,7 +5,7 @@ const config = require("../config/config");
 const logger = require("../utils/logger");
 const { saveMomDocx } = require("./docxGenerator");
 const { renderFromTemplate } = require("./docxTemplateRenderer");
-const { buildUniqueFileName } = require("../utils/filename");
+const { buildUniqueFileName, monthSubdir } = require("../utils/filename");
 const { askClaudeCli } = require("./claudeCliClient");
 const { askOpenAi } = require("./openaiClient");
 
@@ -130,13 +130,11 @@ async function summarizeFile(transcriptFilePath, meetingMeta = {}) {
     templateData.subject || templateData.meetingTitle || meetingMeta.subject || "Meeting";
   const meetingDate = meetingMeta.start || new Date();
 
-  const fileName = buildUniqueFileName(
-    config.SUMMARIES_DIR,
-    subject,
-    meetingDate,
-    ".docx"
-  );
-  const outputPath = path.join(config.SUMMARIES_DIR, fileName);
+  // Kelompokkan notulen per bulan berdasarkan tanggal meeting - supaya data/summaries/
+  // tidak menumpuk jadi 1 folder besar seiring waktu.
+  const outDir = monthSubdir(config.SUMMARIES_DIR, meetingDate);
+  const fileName = buildUniqueFileName(outDir, subject, meetingDate, ".docx");
+  const outputPath = path.join(outDir, fileName);
 
   if (config.mom.templatePath && fs.existsSync(config.mom.templatePath)) {
     logger.info(`Menggunakan template: ${config.mom.templatePath}`);

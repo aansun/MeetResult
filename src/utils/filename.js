@@ -43,4 +43,26 @@ function buildUniqueFileName(dir, title, date, ext) {
   return candidate;
 }
 
-module.exports = { sanitizeFileNamePart, toYYYYMMDD, buildUniqueFileName };
+/**
+ * Format tanggal menjadi "YYYY-MM", dipakai sebagai nama subfolder bulanan.
+ */
+function toYYYYMM(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${yyyy}-${mm}`;
+}
+
+/**
+ * Pastikan subfolder "{baseDir}/{YYYY-MM}" (berdasarkan tanggal meeting/rekaman) ada,
+ * lalu kembalikan path-nya. Dipakai supaya file transkrip & notulen otomatis
+ * terkelompok per bulan (data/transcripts/2026-08/, data/summaries/2026-08/, dst) -
+ * biar tidak menumpuk jadi satu folder besar yang membingungkan seiring waktu.
+ */
+function monthSubdir(baseDir, date) {
+  const dir = path.join(baseDir, toYYYYMM(date));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+module.exports = { sanitizeFileNamePart, toYYYYMMDD, toYYYYMM, monthSubdir, buildUniqueFileName };

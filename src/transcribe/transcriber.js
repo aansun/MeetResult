@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const config = require("../config/config");
 const logger = require("../utils/logger");
+const { monthSubdir } = require("../utils/filename");
 
 /**
  * Menjalankan Whisper untuk mentranskrip file audio hasil rekaman menjadi teks Bahasa Indonesia.
@@ -17,7 +18,9 @@ function transcribeAudio(audioFilePath) {
       return reject(new Error(`File audio tidak ditemukan: ${audioFilePath}`));
     }
 
-    const outDir = config.TRANSCRIPTS_DIR;
+    // Kelompokkan transkrip per bulan berdasarkan tanggal rekaman (mtime file audio) -
+    // supaya data/transcripts/ tidak menumpuk jadi 1 folder besar seiring waktu.
+    const outDir = monthSubdir(config.TRANSCRIPTS_DIR, fs.statSync(audioFilePath).mtime);
     const isClassicWhisper = /(^|\/)whisper$/.test(config.whisper.bin);
 
     const args = [

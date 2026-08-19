@@ -347,13 +347,17 @@ npm install
 ```
 data/
   recordings/    # file audio .wav hasil rekaman (otomatis dihapus setelah AUDIO_RETENTION_DAYS hari)
-  transcripts/   # hasil transkripsi Whisper (.txt)
-  summaries/     # notulen rapat (.docx) + data mentah (.json) hasil Claude
+  transcripts/
+    2026-08/     # hasil transkripsi Whisper (.txt), dikelompokkan otomatis per bulan
+  summaries/
+    2026-08/     # notulen rapat (.docx) + data mentah (.json), dikelompokkan otomatis per bulan
   db.json        # metadata semua meeting
 
 Template/
   MoM_*.pdf      # contoh template MoM perusahaan (referensi struktur dokumen)
 ```
+
+> Folder bulanan (`YYYY-MM`) di `transcripts/` dan `summaries/` dibuat otomatis mengikuti tanggal meeting - supaya tidak menumpuk jadi satu folder besar seiring waktu.
 
 ## 📄 Template MoM
 
