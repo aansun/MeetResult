@@ -61,6 +61,15 @@ func formatShortDate(_ iso: String) -> String {
 
 let envFilePath = projectDir + "/.env"
 
+/// Baca versi aplikasi dari package.json - dipakai di footer "Tentang" window Pengaturan
+/// supaya tidak perlu diupdate manual tiap kali versi berubah.
+func readAppVersion() -> String {
+    guard let data = fm.contents(atPath: projectDir + "/package.json"),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let version = json["version"] as? String else { return "" }
+    return version
+}
+
 func readEnvFile() -> String {
     (try? String(contentsOfFile: envFilePath, encoding: .utf8)) ?? ""
 }
@@ -702,6 +711,7 @@ class SettingsWindowController: NSWindowController {
 
     var claudeRow: NSStackView!
     var openaiRows: [NSStackView] = []
+    var mainStack: NSStackView!
 
     convenience init(appDelegate: AppDelegate) {
         let window = NSWindow(
@@ -762,7 +772,12 @@ class SettingsWindowController: NSWindowController {
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
 
-        let mainStack = NSStackView(views: [
+        let version = readAppVersion()
+        let aboutLabel = NSTextField(labelWithString: "MeetResult\(version.isEmpty ? "" : " v\(version)") \u{2014} by aansun")
+        aboutLabel.font = NSFont.systemFont(ofSize: 11)
+        aboutLabel.textColor = .secondaryLabelColor
+
+        mainStack = NSStackView(views: [
             sectionLabel("Notulen (MoM)"),
             row("Skema:", templatePopup),
             row("Disusun oleh:", preparedByField),
@@ -774,13 +789,15 @@ class SettingsWindowController: NSWindowController {
             openaiBaseRow, openaiKeyRow, openaiModelRow,
             separator(),
             buttonRow,
+            separator(),
+            aboutLabel,
         ])
         mainStack.orientation = .vertical
         mainStack.alignment = .leading
         mainStack.spacing = 10
         mainStack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         mainStack.translatesAutoresizingMaskIntoConstraints = false
-        for sep in [mainStack.arrangedSubviews[4], mainStack.arrangedSubviews[11]] {
+        for sep in [mainStack.arrangedSubviews[4], mainStack.arrangedSubviews[11], mainStack.arrangedSubviews[13]] {
             sep.widthAnchor.constraint(equalToConstant: 358).isActive = true
         }
         buttonRow.widthAnchor.constraint(equalToConstant: 358).isActive = true
@@ -794,6 +811,14 @@ class SettingsWindowController: NSWindowController {
             mainStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
         window?.contentView = contentView
+        resizeToFitContent()
+    }
+
+    /// Hitung ulang & terapkan ukuran window pas dengan konten yang SEDANG terlihat -
+    /// wajib dipanggil ulang tiap kali baris disembunyikan/dimunculkan (lihat
+    /// providerChanged()), karena NSStackView.fittingSize berubah begitu ada arranged
+    /// subview yang isHidden-nya berubah, tapi window TIDAK otomatis mengikuti.
+    private func resizeToFitContent() {
         window?.layoutIfNeeded()
         window?.setContentSize(mainStack.fittingSize)
     }
@@ -802,6 +827,7 @@ class SettingsWindowController: NSWindowController {
         let isOpenai = providerPopup.titleOfSelectedItem == "openai"
         claudeRow.isHidden = isOpenai
         openaiRows.forEach { $0.isHidden = !isOpenai }
+        resizeToFitContent()
     }
 
     /// Baca ulang .env & isi semua field - dipanggil setiap window dibuka, supaya selalu
