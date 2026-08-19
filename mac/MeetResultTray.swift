@@ -57,6 +57,39 @@ func formatShortDate(_ iso: String) -> String {
     return out.string(from: d)
 }
 
+// MARK: - .env: baca/tulis minimalis (baris "KEY=value")
+
+let envFilePath = projectDir + "/.env"
+
+func readEnvFile() -> String {
+    (try? String(contentsOfFile: envFilePath, encoding: .utf8)) ?? ""
+}
+
+func readEnvValue(_ content: String, _ key: String) -> String {
+    guard let range = content.range(
+        of: "(?m)^\(NSRegularExpression.escapedPattern(for: key))=(.*)$",
+        options: .regularExpression
+    ) else { return "" }
+    let line = String(content[range])
+    return String(line.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+}
+
+func setEnvValue(_ content: String, _ key: String, _ value: String) -> String {
+    let pattern = "(?m)^\(NSRegularExpression.escapedPattern(for: key))=.*$"
+    if let range = content.range(of: pattern, options: .regularExpression) {
+        return content.replacingCharacters(in: range, with: "\(key)=\(value)")
+    }
+    let needsNewline = !content.isEmpty && !content.hasSuffix("\n")
+    return content + (needsNewline ? "\n" : "") + "\(key)=\(value)\n"
+}
+
+func templateDisplayName(_ type: String) -> String {
+    switch type {
+    case "meeting_minutes": return "Meeting Minutes (Resume & Attendances)"
+    default: return "Structured (Pembahasan & Action Items)"
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
 
@@ -75,6 +108,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Submenu Event List
     var eventListMenu: NSMenu!
+
+    // Info template MoM aktif + window Pengaturan
+    var templateStatusItem: NSMenuItem!
+    var settingsWindowController: SettingsWindowController?
 
     var timer: Timer?
 
@@ -99,6 +136,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu() {
         let menu = NSMenu()
+
+        // --- Info template MoM yang sedang aktif (label saja, klik "Pengaturan..." untuk ganti) ---
+        templateStatusItem = NSMenuItem(title: "Template: ...", action: nil, keyEquivalent: "")
+        templateStatusItem.isEnabled = false
+        menu.addItem(templateStatusItem)
+        menu.addItem(NSMenuItem.separator())
 
         // --- Submenu: Watch (mode otomatis via kalender) ---
         let watchMenu = NSMenu()
@@ -174,6 +217,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(openLog)
 
         menu.addItem(NSMenuItem.separator())
+
+        let settingsItem = NSMenuItem(title: "Pengaturan...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         let checkUpdate = NSMenuItem(title: "Cek Update...", action: #selector(checkForUpdate), keyEquivalent: "u")
         checkUpdate.target = self
@@ -302,9 +349,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return parseIsoDate(iso)
     }
 
-    /// Waktu modifikasi TERBARU di antara semua file .js di src/ & bin/ - dipakai sebagai
-    /// proxy "kapan source code terakhir berubah", baik lewat `git pull` (meetresult update)
-    /// maupun edit manual.
+    /// Waktu modifikasi TERBARU di antara semua file .js di src/ & bin/, PLUS file .env -
+    /// dipakai sebagai proxy "kapan source code/konfigurasi terakhir berubah", baik lewat
+    /// `git pull` (meetresult update), edit manual, MAUPUN lewat window Pengaturan.
     func latestSourceMtime() -> Date? {
         var latest: Date? = nil
         for subdir in ["src", "bin"] {
@@ -316,6 +363,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                       let modDate = attrs[.modificationDate] as? Date else { continue }
                 if latest == nil || modDate > latest! { latest = modDate }
             }
+        }
+        if let attrs = try? fm.attributesOfItem(atPath: envFilePath),
+           let modDate = attrs[.modificationDate] as? Date {
+            if latest == nil || modDate > latest! { latest = modDate }
         }
         return latest
     }
@@ -337,10 +388,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let stale = isWatcherCodeStale()
 
         let attrTitle = NSMutableAttributedString()
-        let dotColor: NSColor = (running || recordingActive) ? .systemGreen : .systemGray
+        // Hijau = watch aktif & standby (belum merekam), Merah = sedang merekam otomatis
+        // (dipicu watch/kalender), Kuning = sedang merekam manual, Abu-abu = semua berhenti.
+        let dotColor: NSColor
+        if recordingActive {
+            dotColor = isAutoTriggered ? .systemRed : .systemYellow
+        } else if running {
+            dotColor = .systemGreen
+        } else {
+            dotColor = .systemGray
+        }
         attrTitle.append(NSAttributedString(
-            string: "\u{25CF} ", // ●
-            attributes: [.foregroundColor: dotColor]
+            string: "\u{25CF} ", // ● - font kecil supaya tidak terlalu mencolok di menu bar
+            attributes: [
+                .foregroundColor: dotColor,
+                .font: NSFont.systemFont(ofSize: 8),
+                .baselineOffset: 1,
+            ]
         ))
         attrTitle.append(NSAttributedString(
             string: stale ? "MR \u{26A0}\u{FE0F}" : "MR",
@@ -382,6 +446,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         recordManualItem.isEnabled = !recordingActive
         stopManualItem.isEnabled = recordingActive
+
+        let templateType = readEnvValue(readEnvFile(), "MOM_TEMPLATE_TYPE")
+        templateStatusItem.title = "Template: \(templateDisplayName(templateType))"
 
         refreshEventList()
     }
@@ -570,6 +637,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    @objc func openSettings() {
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController(appDelegate: self)
+        }
+        settingsWindowController?.loadValues()
+        settingsWindowController?.window?.center()
+        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc func checkForUpdate() {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -624,6 +701,183 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         notification.title = title
         notification.informativeText = message
         NSUserNotificationCenter.default.deliver(notification)
+    }
+}
+
+// MARK: - Window Pengaturan (edit .env langsung, UI minimalis)
+
+class SettingsWindowController: NSWindowController {
+    weak var appDelegate: AppDelegate?
+
+    let templatePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let preparedByField = NSTextField(string: "")
+    let orgNameField = NSTextField(string: "")
+    let providerPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let claudeModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let openaiBaseURLField = NSTextField(string: "")
+    let openaiApiKeyField = NSSecureTextField(string: "")
+    let openaiModelField = NSTextField(string: "")
+
+    var claudeRow: NSStackView!
+    var openaiRows: [NSStackView] = []
+
+    convenience init(appDelegate: AppDelegate) {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 60),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Pengaturan MeetResult"
+        window.isReleasedWhenClosed = false
+        self.init(window: window)
+        self.appDelegate = appDelegate
+        buildUI()
+    }
+
+    private func separator() -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        return box
+    }
+
+    private func row(_ label: String, _ control: NSView) -> NSStackView {
+        let labelField = NSTextField(labelWithString: label)
+        labelField.alignment = .right
+        labelField.translatesAutoresizingMaskIntoConstraints = false
+        labelField.widthAnchor.constraint(equalToConstant: 130).isActive = true
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        let stack = NSStackView(views: [labelField, control])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        return stack
+    }
+
+    private func sectionLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = NSFont.boldSystemFont(ofSize: 12)
+        return label
+    }
+
+    func buildUI() {
+        templatePopup.addItems(withTitles: ["structured", "meeting_minutes"])
+        providerPopup.addItems(withTitles: ["claude", "openai"])
+        claudeModePopup.addItems(withTitles: ["cli", "api"])
+        providerPopup.target = self
+        providerPopup.action = #selector(providerChanged)
+
+        claudeRow = row("Mode Claude:", claudeModePopup)
+        let openaiBaseRow = row("Base URL:", openaiBaseURLField)
+        let openaiKeyRow = row("API Key:", openaiApiKeyField)
+        let openaiModelRow = row("Model:", openaiModelField)
+        openaiRows = [openaiBaseRow, openaiKeyRow, openaiModelRow]
+
+        let saveButton = NSButton(title: "Simpan", target: self, action: #selector(saveSettings))
+        saveButton.keyEquivalent = "\r"
+        let cancelButton = NSButton(title: "Batal", target: self, action: #selector(closeWindow))
+        let buttonRow = NSStackView(views: [NSView(), cancelButton, saveButton])
+        buttonRow.orientation = .horizontal
+        buttonRow.spacing = 8
+
+        let mainStack = NSStackView(views: [
+            sectionLabel("Notulen (MoM)"),
+            row("Skema:", templatePopup),
+            row("Disusun oleh:", preparedByField),
+            row("Nama Organisasi:", orgNameField),
+            separator(),
+            sectionLabel("Provider AI"),
+            row("Provider:", providerPopup),
+            claudeRow,
+            openaiBaseRow, openaiKeyRow, openaiModelRow,
+            separator(),
+            buttonRow,
+        ])
+        mainStack.orientation = .vertical
+        mainStack.alignment = .leading
+        mainStack.spacing = 10
+        mainStack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        mainStack.translatesAutoresizingMaskIntoConstraints = false
+        for sep in [mainStack.arrangedSubviews[4], mainStack.arrangedSubviews[11]] {
+            sep.widthAnchor.constraint(equalToConstant: 358).isActive = true
+        }
+        buttonRow.widthAnchor.constraint(equalToConstant: 358).isActive = true
+
+        let contentView = NSView()
+        contentView.addSubview(mainStack)
+        NSLayoutConstraint.activate([
+            mainStack.topAnchor.constraint(equalTo: contentView.topAnchor),
+            mainStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            mainStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            mainStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
+        window?.contentView = contentView
+        window?.layoutIfNeeded()
+        window?.setContentSize(mainStack.fittingSize)
+    }
+
+    @objc func providerChanged() {
+        let isOpenai = providerPopup.titleOfSelectedItem == "openai"
+        claudeRow.isHidden = isOpenai
+        openaiRows.forEach { $0.isHidden = !isOpenai }
+    }
+
+    /// Baca ulang .env & isi semua field - dipanggil setiap window dibuka, supaya selalu
+    /// menampilkan nilai TERKINI (mis. kalau ada perubahan manual di .env sejak terakhir dibuka).
+    func loadValues() {
+        let content = readEnvFile()
+
+        let templateType = readEnvValue(content, "MOM_TEMPLATE_TYPE")
+        templatePopup.selectItem(withTitle: templateType.isEmpty ? "structured" : templateType)
+
+        preparedByField.stringValue = readEnvValue(content, "MOM_PREPARED_BY")
+        orgNameField.stringValue = readEnvValue(content, "MOM_ORG_NAME")
+
+        let provider = readEnvValue(content, "SUMMARY_PROVIDER")
+        providerPopup.selectItem(withTitle: provider.isEmpty ? "claude" : provider)
+
+        let claudeMode = readEnvValue(content, "CLAUDE_MODE")
+        claudeModePopup.selectItem(withTitle: claudeMode.isEmpty ? "cli" : claudeMode)
+
+        openaiBaseURLField.stringValue = readEnvValue(content, "OPENAI_BASE_URL")
+        openaiApiKeyField.stringValue = readEnvValue(content, "OPENAI_API_KEY")
+        openaiModelField.stringValue = readEnvValue(content, "OPENAI_MODEL")
+
+        providerChanged()
+    }
+
+    @objc func saveSettings() {
+        var content = readEnvFile()
+        content = setEnvValue(content, "MOM_TEMPLATE_TYPE", templatePopup.titleOfSelectedItem ?? "structured")
+        content = setEnvValue(content, "MOM_PREPARED_BY", preparedByField.stringValue)
+        content = setEnvValue(content, "MOM_ORG_NAME", orgNameField.stringValue)
+        content = setEnvValue(content, "SUMMARY_PROVIDER", providerPopup.titleOfSelectedItem ?? "claude")
+        content = setEnvValue(content, "CLAUDE_MODE", claudeModePopup.titleOfSelectedItem ?? "cli")
+        content = setEnvValue(content, "OPENAI_BASE_URL", openaiBaseURLField.stringValue)
+        content = setEnvValue(content, "OPENAI_API_KEY", openaiApiKeyField.stringValue)
+        content = setEnvValue(content, "OPENAI_MODEL", openaiModelField.stringValue)
+
+        do {
+            try content.write(toFile: envFilePath, atomically: true, encoding: .utf8)
+        } catch {
+            appDelegate?.showAlert(title: "Gagal menyimpan", message: error.localizedDescription)
+            return
+        }
+
+        closeWindow()
+        appDelegate?.updateStatus()
+
+        // .env dimuat sekali saat proses start - restart Watch (kalau sedang jalan) supaya
+        // perubahan pengaturan langsung aktif, sama seperti saat source code berubah.
+        if appDelegate?.isRunning() == true {
+            appDelegate?.restartWatcher()
+        } else {
+            appDelegate?.showNotification(title: "MeetResult", message: "Pengaturan tersimpan.")
+        }
+    }
+
+    @objc func closeWindow() {
+        window?.close()
     }
 }
 
