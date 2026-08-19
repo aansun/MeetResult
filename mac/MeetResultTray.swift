@@ -83,13 +83,6 @@ func setEnvValue(_ content: String, _ key: String, _ value: String) -> String {
     return content + (needsNewline ? "\n" : "") + "\(key)=\(value)\n"
 }
 
-func templateDisplayName(_ type: String) -> String {
-    switch type {
-    case "meeting_minutes": return "Meeting Minutes (Resume & Attendances)"
-    default: return "Structured (Pembahasan & Action Items)"
-    }
-}
-
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
 
@@ -109,8 +102,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Submenu Event List
     var eventListMenu: NSMenu!
 
-    // Info template MoM aktif + window Pengaturan
-    var templateStatusItem: NSMenuItem!
     var settingsWindowController: SettingsWindowController?
 
     var timer: Timer?
@@ -136,12 +127,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func buildMenu() {
         let menu = NSMenu()
-
-        // --- Info template MoM yang sedang aktif (label saja, klik "Pengaturan..." untuk ganti) ---
-        templateStatusItem = NSMenuItem(title: "Template: ...", action: nil, keyEquivalent: "")
-        templateStatusItem.isEnabled = false
-        menu.addItem(templateStatusItem)
-        menu.addItem(NSMenuItem.separator())
 
         // --- Submenu: Watch (mode otomatis via kalender) ---
         let watchMenu = NSMenu()
@@ -446,9 +431,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         recordManualItem.isEnabled = !recordingActive
         stopManualItem.isEnabled = recordingActive
-
-        let templateType = readEnvValue(readEnvFile(), "MOM_TEMPLATE_TYPE")
-        templateStatusItem.title = "Template: \(templateDisplayName(templateType))"
 
         refreshEventList()
     }
