@@ -305,11 +305,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status checks
 
+    /// Cari SEMUA PID proses "node .../meetresult.js watch" yang benar-benar berjalan lewat
+    /// `pgrep` - sumber kebenaran untuk status watch, BUKAN cuma percaya pidFile. pidFile bisa
+    /// tidak sinkron dengan proses yang sebenarnya berjalan (mis. race saat restart, atau
+    /// proses crash tanpa sempat cleanup) - ini pernah nyata bikin ada watcher "nyasar" yang
+    /// masih pakai config lama tanpa terdeteksi, sehingga perubahan .env (mis. ganti template)
+    /// kelihatannya "tidak ngefek".
+    func findAllWatcherPids() -> [Int32] {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        task.arguments = ["-f", "meetresult.js watch"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+        } catch {
+            return []
+        }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        return output.split(separator: "\n").compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+    }
+
+    /// Bunuh SEMUA proses watcher yang ketemu (bukan cuma yang tercatat di pidFile) - mencegah
+    /// proses "nyasar" tetap hidup dengan config lama setelah stop/restart, yang bisa membuat
+    /// 2 proses watcher berjalan bersamaan dengan config berbeda.
+    func killAllWatcherProcesses() {
+        for pid in findAllWatcherPids() {
+            kill(pid, SIGTERM)
+        }
+        try? fm.removeItem(atPath: pidFile)
+        try? fm.removeItem(atPath: watcherMetaFile)
+    }
+
     func isRunning() -> Bool {
-        guard let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8) else { return false }
-        let trimmed = pidStr.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let pid = Int32(trimmed), pid > 0 else { return false }
-        return kill(pid, 0) == 0
+        !findAllWatcherPids().isEmpty
     }
 
     /// Cek file data/recording-state.json (ditulis oleh recorder.js) untuk tahu apakah
@@ -503,12 +535,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// belakang layar, sehingga titik status tetap hijau walau teks sudah "Berhenti".
     @objc func stopWatcher() {
         let wasRunning = isRunning()
-
-        if let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
-           let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            kill(pid, SIGTERM)
-            try? fm.removeItem(atPath: pidFile)
-        }
+        killAllWatcherProcesses()
 
         // Kalau ada rekaman aktif yang dipicu otomatis oleh watcher (bukan manual),
         // hentikan juga sekalian proses & buat notulennya (pakai `meetresult stop`).
@@ -539,15 +566,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// watcher yang baru akan otomatis mengenali rekaman itu lagi lewat mekanisme reconcile
     /// di checkAndAct() pada siklus polling pertamanya.
     @objc func restartWatcher() {
-        if let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
-           let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            kill(pid, SIGTERM)
-        }
-        try? fm.removeItem(atPath: pidFile)
-        try? fm.removeItem(atPath: watcherMetaFile)
+        killAllWatcherProcesses()
         hasNotifiedStale = false
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            // Jaring pengaman kedua: pastikan benar-benar bersih (mis. proses lama butuh
+            // lebih dari 1 detik untuk exit) sebelum start yang baru - supaya TIDAK PERNAH
+            // ada 2 proses watcher berjalan bersamaan dengan config berbeda.
+            self?.killAllWatcherProcesses()
             self?.startWatcher()
             self?.showNotification(title: "MeetResult", message: "Watch berhasil di-restart dengan kode terbaru.")
         }
