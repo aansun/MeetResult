@@ -61,6 +61,10 @@ func formatShortDate(_ iso: String) -> String {
 
 let envFilePath = projectDir + "/.env"
 
+// ID model Claude yang diketahui - dipakai untuk isi awal dropdown di window Pengaturan.
+// Combo box tetap bisa diketik manual kalau ada ID lain yang belum masuk daftar ini.
+let knownClaudeModels = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]
+
 /// Baca versi aplikasi dari package.json - dipakai di footer "Tentang" window Pengaturan
 /// supaya tidak perlu diupdate manual tiap kali versi berubah.
 func readAppVersion() -> String {
@@ -221,6 +225,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(checkUpdate)
 
         menu.addItem(NSMenuItem.separator())
+
+        // Restart manual Watch - sama seperti "Restart Sekarang" di submenu Watch (yang
+        // cuma muncul saat kode/config terdeteksi berubah), tapi ini SELALU ada di menu
+        // utama supaya bisa dipicu manual kapan saja tanpa perlu nunggu badge stale muncul.
+        let restartWatchItem = NSMenuItem(title: "Restart Watch", action: #selector(restartWatcher), keyEquivalent: "")
+        restartWatchItem.target = self
+        menu.addItem(restartWatchItem)
 
         let quitItem = NSMenuItem(title: "Keluar", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -705,13 +716,19 @@ class SettingsWindowController: NSWindowController {
     let orgNameField = NSTextField(string: "")
     let providerPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let claudeModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let claudeCliModelField = NSComboBox()
+    let claudeApiModelField = NSComboBox()
     let openaiBaseURLField = NSTextField(string: "")
     let openaiApiKeyField = NSSecureTextField(string: "")
-    let openaiModelField = NSTextField(string: "")
+    let openaiModelField = NSComboBox()
+    let refreshModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
+    let testButton = NSButton(title: "Test", target: nil, action: nil)
 
-    var claudeRow: NSStackView!
+    var claudeRows: [NSStackView] = []
     var openaiRows: [NSStackView] = []
     var mainStack: NSStackView!
+    private var envSnapshotBeforeTest: String?
+    private var envMtimeBeforeTest: Date?
 
     convenience init(appDelegate: AppDelegate) {
         let window = NSWindow(
@@ -733,14 +750,20 @@ class SettingsWindowController: NSWindowController {
         return box
     }
 
-    private func row(_ label: String, _ control: NSView) -> NSStackView {
+    private func row(_ label: String, _ control: NSView, trailing: NSView? = nil) -> NSStackView {
         let labelField = NSTextField(labelWithString: label)
         labelField.alignment = .right
         labelField.translatesAutoresizingMaskIntoConstraints = false
         labelField.widthAnchor.constraint(equalToConstant: 130).isActive = true
         control.translatesAutoresizingMaskIntoConstraints = false
-        control.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        let stack = NSStackView(views: [labelField, control])
+        control.widthAnchor.constraint(equalToConstant: trailing == nil ? 220 : 188).isActive = true
+        var views: [NSView] = [labelField, control]
+        if let trailing = trailing {
+            trailing.translatesAutoresizingMaskIntoConstraints = false
+            trailing.widthAnchor.constraint(equalToConstant: 24).isActive = true
+            views.append(trailing)
+        }
+        let stack = NSStackView(views: views)
         stack.orientation = .horizontal
         stack.spacing = 8
         return stack
@@ -758,17 +781,37 @@ class SettingsWindowController: NSWindowController {
         claudeModePopup.addItems(withTitles: ["cli", "api"])
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
+        claudeModePopup.target = self
+        claudeModePopup.action = #selector(claudeModeChanged)
 
-        claudeRow = row("Mode Claude:", claudeModePopup)
+        claudeCliModelField.addItems(withObjectValues: knownClaudeModels)
+        claudeApiModelField.addItems(withObjectValues: knownClaudeModels)
+        claudeCliModelField.placeholderString = "default Claude Code CLI"
+        claudeApiModelField.placeholderString = "pilih atau ketik manual"
+
+        refreshModelsButton.target = self
+        refreshModelsButton.action = #selector(refreshOpenAIModels)
+        refreshModelsButton.toolTip = "Ambil daftar model dari server (Base URL)"
+        openaiModelField.placeholderString = "pilih dari daftar atau ketik manual"
+
+        claudeRows = [
+            row("Mode Claude:", claudeModePopup),
+            row("Model (mode CLI):", claudeCliModelField),
+            row("Model (mode API):", claudeApiModelField),
+        ]
         let openaiBaseRow = row("Base URL:", openaiBaseURLField)
         let openaiKeyRow = row("API Key:", openaiApiKeyField)
-        let openaiModelRow = row("Model:", openaiModelField)
+        let openaiModelRow = row("Model:", openaiModelField, trailing: refreshModelsButton)
         openaiRows = [openaiBaseRow, openaiKeyRow, openaiModelRow]
+
+        testButton.target = self
+        testButton.action = #selector(testCurrentModel)
+        testButton.toolTip = "Kirim transkrip kecil ke provider/model yang sedang diisi, tanpa buat file/rekaman"
 
         let saveButton = NSButton(title: "Simpan", target: self, action: #selector(saveSettings))
         saveButton.keyEquivalent = "\r"
         let cancelButton = NSButton(title: "Batal", target: self, action: #selector(closeWindow))
-        let buttonRow = NSStackView(views: [NSView(), cancelButton, saveButton])
+        let buttonRow = NSStackView(views: [testButton, NSView(), cancelButton, saveButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
 
@@ -785,7 +828,7 @@ class SettingsWindowController: NSWindowController {
             separator(),
             sectionLabel("Provider AI"),
             row("Provider:", providerPopup),
-            claudeRow,
+            claudeRows[0], claudeRows[1], claudeRows[2],
             openaiBaseRow, openaiKeyRow, openaiModelRow,
             separator(),
             buttonRow,
@@ -797,7 +840,7 @@ class SettingsWindowController: NSWindowController {
         mainStack.spacing = 10
         mainStack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         mainStack.translatesAutoresizingMaskIntoConstraints = false
-        for sep in [mainStack.arrangedSubviews[4], mainStack.arrangedSubviews[11], mainStack.arrangedSubviews[13]] {
+        for sep in [mainStack.arrangedSubviews[4], mainStack.arrangedSubviews[13], mainStack.arrangedSubviews[15]] {
             sep.widthAnchor.constraint(equalToConstant: 358).isActive = true
         }
         buttonRow.widthAnchor.constraint(equalToConstant: 358).isActive = true
@@ -825,9 +868,72 @@ class SettingsWindowController: NSWindowController {
 
     @objc func providerChanged() {
         let isOpenai = providerPopup.titleOfSelectedItem == "openai"
-        claudeRow.isHidden = isOpenai
+        claudeRows.forEach { $0.isHidden = isOpenai }
         openaiRows.forEach { $0.isHidden = !isOpenai }
         resizeToFitContent()
+    }
+
+    /// Nonaktifkan field model yang TIDAK relevan dengan mode Claude yang sedang dipilih -
+    /// CLAUDE_CLI_MODEL cuma dipakai kalau mode "cli", ANTHROPIC_MODEL cuma kalau mode "api".
+    /// Ini juga yang memperbaiki kasus salah isi field (mis. isi ANTHROPIC_MODEL padahal mode
+    /// masih "cli" sehingga perubahannya tidak pernah kepakai).
+    @objc func claudeModeChanged() {
+        let isApi = claudeModePopup.titleOfSelectedItem == "api"
+        claudeCliModelField.isEnabled = !isApi
+        claudeApiModelField.isEnabled = isApi
+    }
+
+    /// Ambil daftar model dari endpoint OpenAI-compatible yang sedang diisi di field Base URL
+    /// (+ API Key kalau ada), lalu isi dropdown Model - berguna untuk server lokal (oMLX/
+    /// Ollama/LM Studio) yang nama modelnya sering tidak baku/sulit ditebak manual.
+    @objc func refreshOpenAIModels() {
+        var base = openaiBaseURLField.stringValue.trimmingCharacters(in: .whitespaces)
+        if base.isEmpty { base = "https://api.openai.com/v1" }
+        while base.hasSuffix("/") { base.removeLast() }
+
+        guard let url = URL(string: base + "/models") else {
+            appDelegate?.showAlert(title: "URL tidak valid", message: "Cek isian Base URL.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        let apiKey = openaiApiKeyField.stringValue
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        refreshModelsButton.isEnabled = false
+        refreshModelsButton.title = "\u{22EF}"
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshModelsButton.isEnabled = true
+                self.refreshModelsButton.title = "\u{21BB}"
+
+                guard let data = data, error == nil,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let list = json["data"] as? [[String: Any]] else {
+                    self.appDelegate?.showAlert(
+                        title: "Gagal ambil daftar model",
+                        message: error?.localizedDescription ?? "Response dari server tidak sesuai format yang diharapkan."
+                    )
+                    return
+                }
+
+                let ids = list.compactMap { $0["id"] as? String }.sorted()
+                if ids.isEmpty {
+                    self.appDelegate?.showAlert(title: "Tidak ada model", message: "Endpoint ini tidak mengembalikan daftar model.")
+                    return
+                }
+
+                let current = self.openaiModelField.stringValue
+                self.openaiModelField.removeAllItems()
+                self.openaiModelField.addItems(withObjectValues: ids)
+                self.openaiModelField.stringValue = current.isEmpty ? ids[0] : current
+            }
+        }.resume()
     }
 
     /// Baca ulang .env & isi semua field - dipanggil setiap window dibuka, supaya selalu
@@ -846,24 +952,38 @@ class SettingsWindowController: NSWindowController {
 
         let claudeMode = readEnvValue(content, "CLAUDE_MODE")
         claudeModePopup.selectItem(withTitle: claudeMode.isEmpty ? "cli" : claudeMode)
+        claudeCliModelField.stringValue = readEnvValue(content, "CLAUDE_CLI_MODEL")
+        claudeApiModelField.stringValue = readEnvValue(content, "ANTHROPIC_MODEL")
+        claudeModeChanged()
 
         openaiBaseURLField.stringValue = readEnvValue(content, "OPENAI_BASE_URL")
         openaiApiKeyField.stringValue = readEnvValue(content, "OPENAI_API_KEY")
+        openaiModelField.removeAllItems()
         openaiModelField.stringValue = readEnvValue(content, "OPENAI_MODEL")
 
         providerChanged()
     }
 
-    @objc func saveSettings() {
-        var content = readEnvFile()
+    /// Terapkan isi form SEKARANG ke teks .env (belum ditulis ke disk) - dipakai bareng oleh
+    /// saveSettings() (Simpan) dan testCurrentModel() (Test, supaya tes memvalidasi apa yang
+    /// SEDANG diisi di form, termasuk perubahan yang belum di-Simpan).
+    private func applyFormToEnvContent(_ base: String) -> String {
+        var content = base
         content = setEnvValue(content, "MOM_TEMPLATE_TYPE", templatePopup.titleOfSelectedItem ?? "structured")
         content = setEnvValue(content, "MOM_PREPARED_BY", preparedByField.stringValue)
         content = setEnvValue(content, "MOM_ORG_NAME", orgNameField.stringValue)
         content = setEnvValue(content, "SUMMARY_PROVIDER", providerPopup.titleOfSelectedItem ?? "claude")
         content = setEnvValue(content, "CLAUDE_MODE", claudeModePopup.titleOfSelectedItem ?? "cli")
+        content = setEnvValue(content, "CLAUDE_CLI_MODEL", claudeCliModelField.stringValue)
+        content = setEnvValue(content, "ANTHROPIC_MODEL", claudeApiModelField.stringValue)
         content = setEnvValue(content, "OPENAI_BASE_URL", openaiBaseURLField.stringValue)
         content = setEnvValue(content, "OPENAI_API_KEY", openaiApiKeyField.stringValue)
         content = setEnvValue(content, "OPENAI_MODEL", openaiModelField.stringValue)
+        return content
+    }
+
+    @objc func saveSettings() {
+        let content = applyFormToEnvContent(readEnvFile())
 
         do {
             try content.write(toFile: envFilePath, atomically: true, encoding: .utf8)
@@ -881,6 +1001,113 @@ class SettingsWindowController: NSWindowController {
             appDelegate?.restartWatcher()
         } else {
             appDelegate?.showNotification(title: "MeetResult", message: "Pengaturan tersimpan.")
+        }
+    }
+
+    /// Kirim transkrip kecil ke provider/model yang SEDANG diisi di form (lihat `meetresult
+    /// test-ai` di cli.js) - supaya bisa dipastikan kerja dengan benar SEBELUM dipakai untuk
+    /// notulen meeting asli. Menulis form ke .env dulu (persis seperti Simpan) karena proses
+    /// CLI terpisah cuma baca dari file, tapi TIDAK menutup window / restart Watch seperti
+    /// Simpan - murni buat tes.
+    @objc func testCurrentModel() {
+        // Simpan isi .env ASLI dulu sebelum ditimpa buat keperluan tes - dikembalikan lagi
+        // di finishTest() supaya klik "Test" tidak meninggalkan perubahan permanen di .env
+        // kalau user akhirnya klik "Batal" (bukan "Simpan").
+        envSnapshotBeforeTest = readEnvFile()
+        envMtimeBeforeTest = (try? fm.attributesOfItem(atPath: envFilePath))?[.modificationDate] as? Date
+
+        let content = applyFormToEnvContent(envSnapshotBeforeTest!)
+        do {
+            try content.write(toFile: envFilePath, atomically: true, encoding: .utf8)
+        } catch {
+            envSnapshotBeforeTest = nil
+            appDelegate?.showAlert(title: "Gagal menyimpan sebelum tes", message: error.localizedDescription)
+            return
+        }
+
+        testButton.isEnabled = false
+        testButton.title = "Menguji..."
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = [nodeBin, cliScript, "test-ai", "--json"]
+        task.currentDirectoryURL = URL(fileURLWithPath: projectDir)
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
+        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+        task.environment = env
+
+        let stdoutPipe = Pipe()
+        task.standardOutput = stdoutPipe
+        task.standardError = Pipe() // buang stderr (warning Node dsb) - fokus baris JSON terakhir
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try task.run()
+            } catch {
+                DispatchQueue.main.async {
+                    self?.finishTest()
+                    self?.appDelegate?.showAlert(title: "Gagal Menjalankan Tes", message: error.localizedDescription)
+                }
+                return
+            }
+            task.waitUntilExit()
+            let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            DispatchQueue.main.async {
+                self?.finishTest()
+                self?.handleTestResult(output)
+            }
+        }
+    }
+
+    private func finishTest() {
+        testButton.isEnabled = true
+        testButton.title = "Test"
+
+        // Kembalikan .env ke isi ASLI sebelum tes - "Test" hanya mengecek, tidak mengubah
+        // konfigurasi permanen. Kalau user memang mau menyimpan, itu tetap lewat "Simpan".
+        if let original = envSnapshotBeforeTest {
+            try? original.write(toFile: envFilePath, atomically: true, encoding: .utf8)
+            if let mtime = envMtimeBeforeTest {
+                try? fm.setAttributes([.modificationDate: mtime], ofItemAtPath: envFilePath)
+            }
+            envSnapshotBeforeTest = nil
+            envMtimeBeforeTest = nil
+        }
+    }
+
+    private func handleTestResult(_ output: String) {
+        let lastLine = output.split(separator: "\n").last.map(String.init) ?? ""
+        guard let data = lastLine.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            appDelegate?.showAlert(
+                title: "Tes Gagal",
+                message: "Tidak bisa membaca hasil tes.\n\n\(output.isEmpty ? "(tidak ada output)" : String(output.prefix(500)))"
+            )
+            return
+        }
+
+        let providerLabel = json["providerLabel"] as? String ?? ""
+        let ok = json["ok"] as? Bool ?? false
+
+        if ok {
+            let elapsed = json["elapsedSeconds"] as? Double ?? 0
+            let markers = (json["markersFound"] as? [String]) ?? []
+            let note = markers.isEmpty
+                ? "\n\n\u{26A0}\u{FE0F} Respons valid tapi tidak menyebut satupun detail dari transkrip tes - model mungkin mengarang konten, bukan benar-benar membaca transkrip. Waspada untuk meeting asli."
+                : "\n\nKonten terverifikasi mengikuti isi transkrip tes."
+            appDelegate?.showAlert(
+                title: "\u{2705} Provider/Model Siap Dipakai",
+                message: "\(providerLabel)\nWaktu respons: \(elapsed) detik.\(note)"
+            )
+        } else {
+            let stage = json["stage"] as? String ?? ""
+            let errorMsg = json["error"] as? String ?? ""
+            let detail = stage == "placeholder"
+                ? "Model mengembalikan teks placeholder mentah dari instruksi, bukan hasil ekstraksi transkrip asli - model ini kemungkinan tidak cukup mampu mengikuti instruksi JSON terstruktur. Coba model lain."
+                : (errorMsg.isEmpty ? "Gagal menghubungi provider." : errorMsg)
+            appDelegate?.showAlert(title: "\u{274C} Tes Gagal", message: "\(providerLabel)\n\n\(detail)")
         }
     }
 

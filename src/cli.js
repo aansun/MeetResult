@@ -18,6 +18,22 @@ const config = require("./config/config");
 
 const program = new Command();
 
+/**
+ * Override model AI untuk SEKALI proses ini saja (tidak mengubah .env) - dipakai oleh
+ * flag `--model` di command `summarize`/`process`. Aman dilakukan di sini karena tiap
+ * invocation CLI adalah proses Node terpisah yang berumur pendek.
+ */
+function applyModelOverride(model) {
+  if (!model) return;
+  if (config.ai.provider === "openai") {
+    config.openai.model = model;
+  } else if (config.claude.mode === "api") {
+    config.claude.model = model;
+  } else {
+    config.claude.cliModel = model;
+  }
+}
+
 program
   .name("meetresult")
   .description(
@@ -176,6 +192,153 @@ program
   });
 
 program
+  .command("models")
+  .description("Tampilkan daftar model yang tersedia untuk provider AI notulen yang aktif")
+  .action(async () => {
+    logger.title(`MODEL TERSEDIA (provider: ${config.ai.provider})`);
+
+    if (config.ai.provider === "openai") {
+      const axios = require("axios");
+      const baseURL = (config.openai.baseURL || "https://api.openai.com/v1").replace(/\/+$/, "");
+      const headers = {};
+      if (config.openai.apiKey) headers.Authorization = `Bearer ${config.openai.apiKey}`;
+
+      try {
+        const { data } = await axios.get(`${baseURL}/models`, { headers });
+        const ids = (data.data || []).map((m) => m.id).sort();
+        if (ids.length === 0) {
+          logger.info("Tidak ada model terdaftar di endpoint ini.");
+        } else {
+          ids.forEach((id) =>
+            console.log(`  ${id === config.openai.model ? chalk.green("● " + id + "  (aktif)") : "  " + id}`)
+          );
+        }
+        logger.info(`Endpoint: ${baseURL}/models`);
+      } catch (err) {
+        logger.error(`Gagal ambil daftar model dari ${baseURL}: ${err.message}`);
+      }
+      return;
+    }
+
+    logger.info("Claude tidak punya endpoint daftar model publik - gunakan salah satu ID berikut:");
+    ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"].forEach((id) => {
+      const active =
+        config.claude.mode === "api" ? config.claude.model === id : config.claude.cliModel === id;
+      console.log(`  ${active ? chalk.green("● " + id + "  (aktif)") : "  " + id}`);
+    });
+    logger.info(
+      `Model aktif saat ini: ${
+        config.claude.mode === "api"
+          ? config.claude.model
+          : config.claude.cliModel || "(default Claude Code CLI)"
+      }`
+    );
+    logger.info(
+      `Ganti dengan: meetresult summarize <file> --model <id>  (sekali proses), atau lewat Pengaturan/${
+        config.claude.mode === "api" ? "ANTHROPIC_MODEL" : "CLAUDE_CLI_MODEL"
+      } di .env (permanen)`
+    );
+  });
+
+program
+  .command("test-ai")
+  .description(
+    "Tes cepat provider/model AI notulen yang aktif - kirim transkrip kecil, cek responsnya valid & benar-benar mengikuti isi transkrip (tanpa bikin file/rekaman)"
+  )
+  .option("--json", "Output hasil sebagai JSON satu baris (dipakai tray Pengaturan), tanpa log berwarna")
+  .action(async (opts) => {
+    const { requestMomFromAI } = require("./summarize/summarizer");
+    const jsonMode = !!opts.json;
+
+    const providerLabel =
+      config.ai.provider === "openai"
+        ? `openai (${config.openai.baseURL || "https://api.openai.com/v1"}, model: ${
+            config.openai.model || "-"
+          })`
+        : `claude/${config.claude.mode} (model: ${
+            config.claude.mode === "api" ? config.claude.model : config.claude.cliModel || "default"
+          })`;
+
+    if (!jsonMode) {
+      logger.title("TES PROVIDER/MODEL AI");
+      logger.info(`Provider aktif: ${providerLabel}`);
+    }
+
+    // Transkrip kecil dengan detail unik (nama & hari) yang HARUS muncul di hasil kalau
+    // model benar-benar membaca & mengekstrak isi transkrip, bukan mengarang/echo placeholder.
+    const testTranscript =
+      "Rapat verifikasi sistem MeetResult. Dian menyampaikan bahwa proses pengujian koneksi AI " +
+      "berjalan lancar. Disepakati bahwa Fajar akan mengecek ulang hasil notulen paling lambat " +
+      "hari Jumat. Tidak ada kendala lain yang dilaporkan.";
+    const markers = ["dian", "fajar", "jumat"];
+    const timeoutMs = 60000;
+
+    if (!jsonMode) {
+      logger.info(`Mengirim transkrip tes (timeout ${timeoutMs / 1000} detik)...`);
+    }
+
+    const start = Date.now();
+    let result;
+    try {
+      result = await Promise.race([
+        requestMomFromAI(testTranscript, { subject: "Tes Koneksi AI" }),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Timeout setelah ${timeoutMs / 1000} detik - provider terlalu lambat merespons`)),
+            timeoutMs
+          )
+        ),
+      ]);
+    } catch (err) {
+      if (jsonMode) {
+        console.log(JSON.stringify({ ok: false, stage: "request", error: err.message, providerLabel }));
+      } else {
+        logger.error(`GAGAL: ${err.message}`);
+        logger.info(
+          "Kemungkinan penyebab: API key salah/kadaluarsa, endpoint tidak bisa diakses, model ID tidak valid/tidak ada, atau CLI belum login."
+        );
+      }
+      process.exit(1);
+    }
+
+    const elapsedSeconds = Math.round(((Date.now() - start) / 1000) * 10) / 10;
+    const raw = JSON.stringify(result).toLowerCase();
+
+    // Pola kegagalan nyata yang pernah terjadi: model mengembalikan teks instruksi/placeholder
+    // dari system prompt mentah-mentah ("judul singkat rapat", "nama peserta", dst), bukan
+    // hasil ekstraksi transkrip - biasanya tanda model terlalu lemah untuk tugas ini.
+    const placeholderHit = raw.includes("judul singkat rapat") || raw.includes("nama peserta");
+    if (placeholderHit) {
+      if (jsonMode) {
+        console.log(JSON.stringify({ ok: false, stage: "placeholder", elapsedSeconds, providerLabel }));
+      } else {
+        logger.error(
+          "GAGAL: model mengembalikan teks placeholder mentah dari instruksi, bukan hasil ekstraksi transkrip asli."
+        );
+        logger.info("Model ini kemungkinan tidak cukup mampu mengikuti instruksi JSON terstruktur - coba model lain.");
+      }
+      process.exit(1);
+    }
+
+    const markersFound = markers.filter((m) => raw.includes(m));
+
+    if (jsonMode) {
+      console.log(JSON.stringify({ ok: true, elapsedSeconds, markersFound, providerLabel }));
+      return;
+    }
+
+    logger.success(`Respons diterima dalam ${elapsedSeconds} detik, format JSON valid.`);
+    if (markersFound.length === 0) {
+      logger.warn(
+        "PERINGATAN: respons valid tapi tidak menyebut satupun detail dari transkrip tes (nama/hari yang disisipkan) - model mungkin mengarang konten, bukan benar-benar membaca transkrip. Waspada saat dipakai untuk meeting asli."
+      );
+    } else {
+      logger.success(`Konten terverifikasi mengikuti isi transkrip tes (ditemukan: ${markersFound.join(", ")}).`);
+    }
+    logger.success("Provider/model ini siap dipakai untuk notulen.");
+  });
+
+program
   .command("devices")
   .description("Tampilkan daftar perangkat audio yang terdeteksi ffmpeg")
   .action(async () => {
@@ -209,8 +372,10 @@ program
   .option("-p, --participants <peserta>", "Daftar peserta (opsional)", "")
   .option("--time <waktu>", "Jam rapat, mis. '09:00 - 10:30 WITA' (untuk skema meeting_minutes)", "")
   .option("--location <lokasi>", "Lokasi rapat (untuk skema meeting_minutes)", "")
+  .option("--model <model>", "Override model AI untuk sekali proses ini saja (tidak mengubah .env)")
   .action(async (fileTranskrip, opts) => {
     try {
+      applyModelOverride(opts.model);
       const filePath = path.resolve(fileTranskrip);
       const out = await summarizeFile(filePath, {
         subject: opts.title,
@@ -230,8 +395,10 @@ program
   .command("process <fileAudio>")
   .description("Jalankan pipeline lengkap: audio -> transkrip -> notulen")
   .option("-t, --title <judul>", "Judul rapat", "Meeting")
+  .option("--model <model>", "Override model AI untuk sekali proses ini saja (tidak mengubah .env)")
   .action(async (fileAudio, opts) => {
     try {
+      applyModelOverride(opts.model);
       const filePath = path.resolve(fileAudio);
       const id = `adhoc-${Date.now()}`;
       const record = db.addMeeting({
