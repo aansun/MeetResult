@@ -138,5 +138,9 @@ module.exports = {
             ? "mom_meeting_minutes_template.docx"
             : "mom_template.docx"
         ),
+    // Kirim ulang JSON notulen ke AI untuk perbaikan bahasa (lebih profesional/padat/rapi)
+    // sebelum dirender ke .docx - tanpa mengubah struktur atau menghilangkan informasi.
+    // Nambah 1x panggilan AI lagi (waktu & biaya) tiap notulen dibuat. "false" untuk nonaktifkan.
+    polishLanguage: (process.env.MOM_POLISH_LANGUAGE || "true") === "true",
   },
 };

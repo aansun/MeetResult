@@ -100,6 +100,7 @@ Isi `.env`:
 | `AUDIO_RETENTION_DAYS` | Berapa hari file audio disimpan sebelum dihapus otomatis (default `3`) |
 | `MOM_PREPARED_BY` | Nama yang tercantum di kolom "Disusun oleh" pada dokumen MoM |
 | `MOM_ORG_NAME` | Nama program/organisasi opsional yang tampil sebagai subjudul dokumen |
+| `MOM_POLISH_LANGUAGE` | `true` (default) - haluskan bahasa notulen (lebih profesional/padat) lewat 1x panggilan AI tambahan, tanpa mengubah struktur/menghilangkan info |
 
 ### 🤖 Setup Provider AI untuk Notulen
 

@@ -85,6 +85,22 @@ async function callClaudeCli(systemPrompt, userPrompt) {
   return askClaudeCli(fullPrompt);
 }
 
+/**
+ * Kirim prompt ke provider AI yang aktif (Claude CLI/API atau OpenAI-compatible) dan
+ * kembalikan teks respons mentah. Dipakai baik oleh requestMomFromAI() (ekstraksi awal)
+ * maupun polishMomLanguage() (penghalusan bahasa, lihat di bawah).
+ */
+async function askAI(systemPrompt, userPrompt) {
+  const provider = config.ai.provider;
+  if (provider === "openai") {
+    return askOpenAi(systemPrompt, userPrompt);
+  }
+  if (config.claude.mode === "api") {
+    return callClaudeApi(systemPrompt, userPrompt);
+  }
+  return callClaudeCli(systemPrompt, userPrompt);
+}
+
 async function requestMomFromAI(transcriptText, meetingMeta = {}) {
   const schema = getSchema();
   const provider = config.ai.provider;
@@ -95,17 +111,85 @@ async function requestMomFromAI(transcriptText, meetingMeta = {}) {
   );
 
   const userPrompt = schema.buildUserPrompt(transcriptText, meetingMeta);
-
-  let text;
-  if (provider === "openai") {
-    text = await askOpenAi(schema.SYSTEM_PROMPT, userPrompt);
-  } else if (config.claude.mode === "api") {
-    text = await callClaudeApi(schema.SYSTEM_PROMPT, userPrompt);
-  } else {
-    text = await callClaudeCli(schema.SYSTEM_PROMPT, userPrompt);
-  }
-
+  const text = await askAI(schema.SYSTEM_PROMPT, userPrompt);
   return extractJson(text);
+}
+
+const POLISH_SYSTEM_PROMPT = `Kamu adalah editor bahasa profesional untuk notulen rapat korporat berbahasa Indonesia.
+
+Tugasmu: terima draft notulen dalam format JSON, lalu perbaiki HANYA kualitas bahasanya -
+buat lebih profesional, padat, jelas, dan mengalir seperti notulen korporat resmi.
+
+ATURAN KETAT:
+- JANGAN mengubah struktur/nama key JSON sama sekali.
+- JUMLAH ITEM di setiap array (mis. discussion, actionItems, resume, attendees) HARUS
+  SAMA PERSIS dengan draft asli - jangan menggabungkan, memecah, menambah, atau menghapus
+  item apapun. Hanya perbaiki kalimat DI DALAM tiap item.
+- JANGAN menghilangkan informasi penting: angka, tanggal, nama orang/perusahaan/sistem,
+  keputusan, dan action item WAJIB tetap ada apa adanya (boleh dirapikan kalimatnya, tidak
+  boleh hilang esensinya).
+- JANGAN menambahkan informasi baru yang tidak ada di draft asli.
+- Hilangkan kata pengisi/pengulangan akibat transkripsi lisan (mis. "kan", "gitu", "ya",
+  kalimat yang berulang-ulang) dan buat lebih ringkas TANPA mengurangi esensi - kalimat
+  hasil perbaikan sebaiknya tidak lebih panjang dari aslinya.
+- Field kosong atau "Tidak disebutkan dalam transkrip" biarkan apa adanya, jangan dikarang.
+- Field angka/nomor urut JANGAN diubah.
+
+Keluarkan HANYA objek JSON hasil perbaikan, tanpa markdown/code fence/penjelasan tambahan.`;
+
+function buildPolishUserPrompt(momJson) {
+  return `Draft notulen (JSON):\n\n${JSON.stringify(momJson, null, 2)}\n\nPerbaiki bahasanya sesuai instruksi, keluarkan JSON hasil perbaikan dengan struktur persis sama.`;
+}
+
+/**
+ * Validasi bahwa hasil penghalusan bahasa TIDAK mengubah struktur/jumlah item - hanya
+ * kalimat di dalamnya yang boleh berubah. Kalau gagal validasi, hasil dianggap tidak aman
+ * dipakai (kemungkinan AI menggabungkan/menghapus item) dan draft asli dipertahankan.
+ */
+function polishedStructureIsValid(original, polished) {
+  if (typeof polished !== "object" || polished === null || Array.isArray(polished)) return false;
+
+  const originalKeys = Object.keys(original).sort().join(",");
+  const polishedKeys = Object.keys(polished).sort().join(",");
+  if (originalKeys !== polishedKeys) return false;
+
+  for (const key of Object.keys(original)) {
+    if (Array.isArray(original[key])) {
+      if (!Array.isArray(polished[key]) || polished[key].length !== original[key].length) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Tahap kedua (opsional, default aktif - lihat MOM_POLISH_LANGUAGE): kirim ulang JSON MoM
+ * hasil ekstraksi ke AI khusus untuk memperbaiki kualitas bahasanya - lebih profesional,
+ * padat, dan rapi - TANPA mengubah struktur atau menghilangkan informasi. Gagal dengan aman:
+ * kalau hasilnya tidak valid/error, draft asli tetap dipakai (tidak pernah gagal total
+ * gara-gara langkah ini).
+ */
+async function polishMomLanguage(momJson) {
+  if (!config.mom.polishLanguage) return momJson;
+
+  try {
+    logger.info("Menghaluskan bahasa notulen...");
+    const text = await askAI(POLISH_SYSTEM_PROMPT, buildPolishUserPrompt(momJson));
+    const polished = extractJson(text);
+
+    if (!polishedStructureIsValid(momJson, polished)) {
+      logger.warn(
+        "Hasil penghalusan bahasa mengubah struktur/jumlah item - draft asli dipertahankan."
+      );
+      return momJson;
+    }
+
+    return polished;
+  } catch (err) {
+    logger.warn(`Gagal menghaluskan bahasa notulen (${err.message}) - draft asli dipertahankan.`);
+    return momJson;
+  }
 }
 
 /**
@@ -115,7 +199,8 @@ async function requestMomFromAI(transcriptText, meetingMeta = {}) {
 async function summarizeFile(transcriptFilePath, meetingMeta = {}) {
   const schema = getSchema();
   const transcriptText = fs.readFileSync(transcriptFilePath, "utf-8");
-  const momJson = await requestMomFromAI(transcriptText, meetingMeta);
+  let momJson = await requestMomFromAI(transcriptText, meetingMeta);
+  momJson = await polishMomLanguage(momJson);
 
   const media = meetingMeta.media || "Online Meeting - Microsoft Teams";
   const templateData = schema.mapToTemplateData(
@@ -162,4 +247,4 @@ async function summarizeFile(transcriptFilePath, meetingMeta = {}) {
   return outputPath;
 }
 
-module.exports = { summarizeFile, requestMomFromAI };
+module.exports = { summarizeFile, requestMomFromAI, polishMomLanguage };
