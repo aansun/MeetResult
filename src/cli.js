@@ -27,6 +27,8 @@ function applyModelOverride(model) {
   if (!model) return;
   if (config.ai.provider === "openai") {
     config.openai.model = model;
+  } else if (config.ai.provider === "agy") {
+    config.agy.model = model;
   } else if (config.claude.mode === "api") {
     config.claude.model = model;
   } else {
@@ -220,6 +222,29 @@ program
       return;
     }
 
+    if (config.ai.provider === "agy") {
+      const { execFileSync } = require("child_process");
+      try {
+        const output = execFileSync(config.agy.cliBin, ["models"], { encoding: "utf-8" });
+        output
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .filter((line) => !/^fetching/i.test(line))
+          .forEach((line) => {
+            const [id] = line.split("\t");
+            const active = config.agy.model ? id === config.agy.model : false;
+            console.log(`  ${active ? chalk.green("● " + line + "  (aktif)") : "  " + line}`);
+          });
+        if (!config.agy.model) {
+          logger.info("AGY_MODEL kosong - agy pakai model default sesi yang sedang login.");
+        }
+      } catch (err) {
+        logger.error(`Gagal ambil daftar model dari '${config.agy.cliBin}': ${err.message}`);
+      }
+      return;
+    }
+
     logger.info("Claude tidak punya endpoint daftar model publik - gunakan salah satu ID berikut:");
     ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"].forEach((id) => {
       const active =
@@ -255,6 +280,8 @@ program
         ? `openai (${config.openai.baseURL || "https://api.openai.com/v1"}, model: ${
             config.openai.model || "-"
           })`
+        : config.ai.provider === "agy"
+        ? `agy (model: ${config.agy.model || "default"})`
         : `claude/${config.claude.mode} (model: ${
             config.claude.mode === "api" ? config.claude.model : config.claude.cliModel || "default"
           })`;

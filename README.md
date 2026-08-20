@@ -91,6 +91,8 @@ Isi `.env`:
 | `OPENAI_BASE_URL` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Default OpenAI cloud, atau arahkan ke server lokal (oMLX/Ollama/LM Studio) |
 | `OPENAI_API_KEY` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Kosongkan untuk server lokal yang tidak butuh auth |
 | `OPENAI_MODEL` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Nama model sesuai provider/server |
+| `TRANSCRIBE_PROVIDER` | `whisper` (default, lokal/offline) atau `gemini` (butuh internet, lihat [Transkripsi via Gemini](#-transkripsi-via-gemini-opsional)) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Hanya dipakai jika `TRANSCRIBE_PROVIDER=gemini`. Dari https://aistudio.google.com/apikey |
 | `WHISPER_MODEL` | `small` / `medium` / `large` (makin besar makin akurat, makin lambat) |
 | `WHISPER_BATCHED` | `true` (default) - percepat transkripsi 2-4x, penting untuk meeting panjang |
 | `WHISPER_BATCH_SIZE` | Default `8`. Kecilkan ke `4` kalau RAM terbatas (≤8GB) |
@@ -110,6 +112,7 @@ Step transkripsi (audio→teks) selalu pakai Whisper lokal — lihat catatan di 
 |---|---|
 | `claude` (default) | Pakai Claude Code CLI (subscription, tanpa API key) atau Anthropic API |
 | `openai` | Pakai endpoint Chat Completions **OpenAI-compatible** — bisa **cloud** (OpenAI) atau **lokal** (oMLX, Ollama, LM Studio, vLLM, dll) |
+| `agy` | Pakai **Antigravity CLI** (Google, akses model Gemini) yang sudah login di mesin — subscription, tanpa API key terpisah |
 
 > **Auto-deteksi saat install**: `npm install` otomatis mengecek apakah ada server AI lokal aktif — **oMLX** (baca port & API key langsung dari `~/.omlx/settings.json`, jadi otomatis TERMASUK autentikasinya), **Ollama** (`:11434`), atau **LM Studio** (`:1234`). Kalau ketemu, `.env` langsung di-set `SUMMARY_PROVIDER=openai` + `OPENAI_BASE_URL` (+ `OPENAI_API_KEY` untuk oMLX) yang sesuai. Kalau server lokal baru dinyalakan setelah install, jalankan ulang deteksinya kapan saja:
 > ```bash
@@ -172,6 +175,46 @@ MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription
    ```
 
 > Alternatif: set `CLAUDE_MODE=api` dan isi `ANTHROPIC_API_KEY` jika ingin pakai Anthropic API langsung (dikenakan biaya per token, tidak pakai subscription Claude Code).
+
+#### Opsi D — `agy` (Antigravity CLI, akses model Gemini)
+
+[Antigravity](https://antigravity.google) adalah CLI resmi Google untuk akses model Gemini (mirip pola Claude Code CLI di atas) — MeetResult shell-out ke binary `agy` yang sudah kamu install & login sendiri, **bukan** reverse-engineer OAuth/spoofing.
+
+1. Install & login Antigravity CLI sesuai panduan resminya, pastikan `agy` ada di PATH:
+   ```bash
+   agy --version
+   ```
+2. Cek kamu sudah login & lihat model yang tersedia:
+   ```bash
+   agy models
+   ```
+3. Di `.env`:
+   ```
+   SUMMARY_PROVIDER=agy
+   AGY_CLI_BIN=agy
+   AGY_MODEL=gemini-3.5-flash-low
+   ```
+   Kosongkan `AGY_MODEL` untuk pakai model default sesi yang sedang login.
+
+> Catatan teknis: `agy` menerima prompt lewat **argumen command**, bukan stdin (beda dari Claude CLI) — MeetResult sudah menangani ini otomatis, cuma relevan kalau kamu ingin tahu cara kerjanya.
+
+### 🎙️ Transkripsi via Gemini (opsional)
+
+Default transkripsi (audio→teks) tetap **Whisper** (lokal, offline, gratis) - lihat [Prasyarat](#1-prasyarat). Sebagai alternatif, kamu bisa pakai **Gemini API** untuk transkripsi: Gemini bisa menerima file audio secara langsung (native audio understanding), beda dari Claude yang cuma menerima teks/gambar.
+
+**Kapan pakai ini**: kalau tidak mau install Whisper secara lokal, atau ingin coba akurasi Gemini untuk audio yang sulit. **Trade-off**: butuh koneksi internet, dan audio meeting kamu terkirim ke server Google (bandingkan dengan Whisper yang 100% lokal).
+
+1. Dapatkan API key di https://aistudio.google.com/apikey
+2. Cek nama model **audio-capable** terbaru di Google AI Studio (nama model Gemini berubah dari waktu ke waktu, jadi sengaja tidak ada default bawaan di MeetResult)
+3. Isi `.env`:
+   ```
+   TRANSCRIBE_PROVIDER=gemini
+   GEMINI_API_KEY=...
+   GEMINI_MODEL=...
+   ```
+4. Jalankan `meetresult transcribe <file.wav>` untuk tes
+
+> Ini terpisah dari provider notulen (`SUMMARY_PROVIDER`) - kamu bisa campur, misalnya transkripsi pakai Gemini tapi notulen tetap pakai Claude, atau sebaliknya.
 
 ### Setup Kalender — pilih salah satu mode
 

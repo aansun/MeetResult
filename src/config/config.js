@@ -44,6 +44,9 @@ module.exports = {
     // "claude" (default): pakai Claude, lihat konfigurasi `claude.*` di bawah
     // "openai": pakai endpoint Chat Completions OpenAI-compatible, lihat `openai.*` di bawah -
     //   bisa OpenAI cloud ATAU server LOKAL (Ollama/MLX/LM Studio) via OPENAI_BASE_URL
+    // "agy": pakai Antigravity CLI (Google, akses model Gemini) yang sudah login di mesin
+    //   ini, lihat konfigurasi `agy.*` di bawah - sama seperti CLAUDE_MODE=cli, ini shell-out
+    //   ke binary resmi yang sudah user install & login sendiri, bukan reverse-engineer OAuth.
     provider: (process.env.SUMMARY_PROVIDER || "claude").toLowerCase(),
   },
 
@@ -57,14 +60,40 @@ module.exports = {
     cliModel: process.env.CLAUDE_CLI_MODEL || "",
   },
 
+  // --- Antigravity CLI (khusus SUMMARY_PROVIDER=agy) ---
+  agy: {
+    cliBin: process.env.AGY_CLI_BIN || "agy",
+    // Kosongkan untuk pakai model default sesi agy yang sedang login. Cek pilihan model
+    // dengan `agy models` di terminal.
+    model: process.env.AGY_MODEL || "",
+  },
+
   openai: {
     // Base URL OpenAI-compatible - default ke OpenAI cloud, tapi bisa diarahkan ke server LOKAL
     // yang expose endpoint yang sama, mis. Ollama (http://localhost:11434/v1), MLX/mlx-omni-server
-    // (http://localhost:10240/v1), atau LM Studio (http://localhost:1234/v1).
+    // (http://localhost:10240/v1), atau LM Studio (http://localhost:1234/v1). Google juga
+    // menyediakan endpoint OpenAI-compatible resmi untuk Gemini - lihat README kalau mau
+    // pakai Gemini untuk NOTULEN (bukan transkripsi) lewat provider ini.
     baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
     // Kosongkan jika server lokal tidak butuh autentikasi (umum untuk Ollama/MLX/LM Studio)
     apiKey: process.env.OPENAI_API_KEY || "",
     model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+  },
+
+  // --- Gemini API native (khusus TRANSCRIBE_PROVIDER=gemini) ---
+  // Beda dari config `openai` di atas: ini API Gemini ASLI (bukan lewat shim OpenAI-compatible),
+  // dipakai untuk transkripsi audio karena Gemini bisa terima file audio langsung, sedangkan
+  // endpoint chat-completions OpenAI-compatible pada umumnya cuma terima teks.
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || "",
+    // WAJIB diisi manual - cek nama model audio-capable terbaru di https://aistudio.google.com
+    model: process.env.GEMINI_MODEL || "",
+  },
+
+  transcribe: {
+    // "whisper" (default, lokal/offline/gratis) atau "gemini" (butuh internet + GEMINI_API_KEY,
+    // audio terkirim ke server Google, tapi tidak perlu install apapun secara lokal)
+    provider: (process.env.TRANSCRIBE_PROVIDER || "whisper").toLowerCase(),
   },
 
   whisper: {

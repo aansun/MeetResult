@@ -4,6 +4,7 @@ const path = require("path");
 const config = require("../config/config");
 const logger = require("../utils/logger");
 const { monthSubdir } = require("../utils/filename");
+const { transcribeWithGemini } = require("./geminiTranscriber");
 
 /**
  * Menjalankan Whisper untuk mentranskrip file audio hasil rekaman menjadi teks Bahasa Indonesia.
@@ -12,15 +13,8 @@ const { monthSubdir } = require("../utils/filename");
  *   - Ringan (tanpa PyTorch), cepat, cocok untuk Apple Silicon.
  * Alternatif: `whisper` (openai-whisper asli, lebih berat, butuh flag --fp16).
  */
-function transcribeAudio(audioFilePath) {
+function transcribeWithWhisper(audioFilePath, outDir) {
   return new Promise((resolve, reject) => {
-    if (!fs.existsSync(audioFilePath)) {
-      return reject(new Error(`File audio tidak ditemukan: ${audioFilePath}`));
-    }
-
-    // Kelompokkan transkrip per bulan berdasarkan tanggal rekaman (mtime file audio) -
-    // supaya data/transcripts/ tidak menumpuk jadi 1 folder besar seiring waktu.
-    const outDir = monthSubdir(config.TRANSCRIPTS_DIR, fs.statSync(audioFilePath).mtime);
     const isClassicWhisper = /(^|\/)whisper$/.test(config.whisper.bin);
 
     const args = [
@@ -77,14 +71,46 @@ function transcribeAudio(audioFilePath) {
       const base = path.basename(audioFilePath, path.extname(audioFilePath));
       const transcriptFile = path.join(outDir, `${base}.txt`);
       if (!fs.existsSync(transcriptFile)) {
-        return reject(
-          new Error(`Transkrip tidak ditemukan di ${transcriptFile}`)
-        );
+        return reject(new Error(`Transkrip tidak ditemukan di ${transcriptFile}`));
       }
       logger.success(`Transkrip selesai: ${transcriptFile}`);
       resolve(transcriptFile);
     });
   });
+}
+
+/**
+ * Transkrip pakai Gemini API (lihat geminiTranscriber.js) - hasil teksnya ditulis manual
+ * ke file, mengikuti konvensi nama & folder bulanan yang sama seperti jalur Whisper, supaya
+ * langkah berikutnya (summarizer) tidak perlu tahu provider transkripsi mana yang dipakai.
+ */
+async function transcribeWithGeminiToFile(audioFilePath, outDir) {
+  const base = path.basename(audioFilePath, path.extname(audioFilePath));
+  const transcriptFile = path.join(outDir, `${base}.txt`);
+
+  const text = await transcribeWithGemini(audioFilePath);
+  fs.writeFileSync(transcriptFile, text, "utf-8");
+  logger.success(`Transkrip selesai: ${transcriptFile}`);
+  return transcriptFile;
+}
+
+/**
+ * Transkrip file audio jadi teks - dispatch ke Whisper (default, lokal/offline) atau Gemini
+ * (TRANSCRIBE_PROVIDER=gemini, butuh internet & GEMINI_API_KEY, tapi bisa native paham audio).
+ */
+async function transcribeAudio(audioFilePath) {
+  if (!fs.existsSync(audioFilePath)) {
+    throw new Error(`File audio tidak ditemukan: ${audioFilePath}`);
+  }
+
+  // Kelompokkan transkrip per bulan berdasarkan tanggal rekaman (mtime file audio) -
+  // supaya data/transcripts/ tidak menumpuk jadi 1 folder besar seiring waktu.
+  const outDir = monthSubdir(config.TRANSCRIPTS_DIR, fs.statSync(audioFilePath).mtime);
+
+  if (config.transcribe.provider === "gemini") {
+    return transcribeWithGeminiToFile(audioFilePath, outDir);
+  }
+  return transcribeWithWhisper(audioFilePath, outDir);
 }
 
 module.exports = { transcribeAudio };

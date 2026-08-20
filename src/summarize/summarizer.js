@@ -8,6 +8,7 @@ const { renderFromTemplate } = require("./docxTemplateRenderer");
 const { buildUniqueFileName, monthSubdir } = require("../utils/filename");
 const { askClaudeCli } = require("./claudeCliClient");
 const { askOpenAi } = require("./openaiClient");
+const { askAgyCli } = require("./agyCliClient");
 
 const structuredSchema = require("./schemas/structuredSchema");
 const meetingMinutesSchema = require("./schemas/meetingMinutesSchema");
@@ -86,14 +87,17 @@ async function callClaudeCli(systemPrompt, userPrompt) {
 }
 
 /**
- * Kirim prompt ke provider AI yang aktif (Claude CLI/API atau OpenAI-compatible) dan
- * kembalikan teks respons mentah. Dipakai baik oleh requestMomFromAI() (ekstraksi awal)
- * maupun polishMomLanguage() (penghalusan bahasa, lihat di bawah).
+ * Kirim prompt ke provider AI yang aktif (Claude CLI/API, OpenAI-compatible, atau Antigravity
+ * CLI) dan kembalikan teks respons mentah. Dipakai baik oleh requestMomFromAI() (ekstraksi
+ * awal) maupun polishMomLanguage() (penghalusan bahasa, lihat di bawah).
  */
 async function askAI(systemPrompt, userPrompt) {
   const provider = config.ai.provider;
   if (provider === "openai") {
     return askOpenAi(systemPrompt, userPrompt);
+  }
+  if (provider === "agy") {
+    return askAgyCli(`${systemPrompt}\n\n${userPrompt}`);
   }
   if (config.claude.mode === "api") {
     return callClaudeApi(systemPrompt, userPrompt);
