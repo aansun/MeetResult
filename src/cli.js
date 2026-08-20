@@ -41,7 +41,7 @@ program
   .description(
     "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis, Bahasa Indonesia."
   )
-  .version("1.5.1");
+  .version("1.6.0");
 
 program
   .command("login")
