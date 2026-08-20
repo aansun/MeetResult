@@ -748,10 +748,13 @@ class SettingsWindowController: NSWindowController {
     let openaiApiKeyField = NSSecureTextField(string: "")
     let openaiModelField = NSComboBox()
     let refreshModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
+    let agyModelField = NSComboBox()
+    let refreshAgyModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let testButton = NSButton(title: "Test", target: nil, action: nil)
 
     var claudeRows: [NSStackView] = []
     var openaiRows: [NSStackView] = []
+    var agyRows: [NSStackView] = []
     var mainStack: NSStackView!
     private var envSnapshotBeforeTest: String?
     private var envMtimeBeforeTest: Date?
@@ -803,7 +806,7 @@ class SettingsWindowController: NSWindowController {
 
     func buildUI() {
         templatePopup.addItems(withTitles: ["structured", "meeting_minutes"])
-        providerPopup.addItems(withTitles: ["claude", "openai"])
+        providerPopup.addItems(withTitles: ["claude", "openai", "agy"])
         claudeModePopup.addItems(withTitles: ["cli", "api"])
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
@@ -829,6 +832,13 @@ class SettingsWindowController: NSWindowController {
         let openaiKeyRow = row("API Key:", openaiApiKeyField)
         let openaiModelRow = row("Model:", openaiModelField, trailing: refreshModelsButton)
         openaiRows = [openaiBaseRow, openaiKeyRow, openaiModelRow]
+
+        refreshAgyModelsButton.target = self
+        refreshAgyModelsButton.action = #selector(refreshAgyModels)
+        refreshAgyModelsButton.toolTip = "Ambil daftar model dari `agy models`"
+        agyModelField.placeholderString = "kosongkan untuk default sesi agy"
+        let agyModelRow = row("Model (Antigravity):", agyModelField, trailing: refreshAgyModelsButton)
+        agyRows = [agyModelRow]
 
         testButton.target = self
         testButton.action = #selector(testCurrentModel)
@@ -856,6 +866,7 @@ class SettingsWindowController: NSWindowController {
             row("Provider:", providerPopup),
             claudeRows[0], claudeRows[1], claudeRows[2],
             openaiBaseRow, openaiKeyRow, openaiModelRow,
+            agyRows[0],
             separator(),
             buttonRow,
             separator(),
@@ -866,7 +877,7 @@ class SettingsWindowController: NSWindowController {
         mainStack.spacing = 10
         mainStack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         mainStack.translatesAutoresizingMaskIntoConstraints = false
-        for sep in [mainStack.arrangedSubviews[4], mainStack.arrangedSubviews[13], mainStack.arrangedSubviews[15]] {
+        for sep in [mainStack.arrangedSubviews[4], mainStack.arrangedSubviews[14], mainStack.arrangedSubviews[16]] {
             sep.widthAnchor.constraint(equalToConstant: 358).isActive = true
         }
         buttonRow.widthAnchor.constraint(equalToConstant: 358).isActive = true
@@ -893,10 +904,74 @@ class SettingsWindowController: NSWindowController {
     }
 
     @objc func providerChanged() {
-        let isOpenai = providerPopup.titleOfSelectedItem == "openai"
-        claudeRows.forEach { $0.isHidden = isOpenai }
-        openaiRows.forEach { $0.isHidden = !isOpenai }
+        let selected = providerPopup.titleOfSelectedItem ?? "claude"
+        claudeRows.forEach { $0.isHidden = selected != "claude" }
+        openaiRows.forEach { $0.isHidden = selected != "openai" }
+        agyRows.forEach { $0.isHidden = selected != "agy" }
         resizeToFitContent()
+    }
+
+    /// Ambil daftar model dari `agy models` (shell-out, mirip refreshOpenAIModels() tapi lewat
+    /// CLI bukan HTTP) dan isi dropdown Model (Antigravity).
+    @objc func refreshAgyModels() {
+        refreshAgyModelsButton.isEnabled = false
+        refreshAgyModelsButton.title = "\u{22EF}"
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = [config_agyCliBin(), "models"]
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
+        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+        task.environment = env
+
+        let stdoutPipe = Pipe()
+        task.standardOutput = stdoutPipe
+        task.standardError = Pipe()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try task.run()
+            } catch {
+                DispatchQueue.main.async {
+                    self?.refreshAgyModelsButton.isEnabled = true
+                    self?.refreshAgyModelsButton.title = "\u{21BB}"
+                    self?.appDelegate?.showAlert(title: "Gagal ambil daftar model", message: error.localizedDescription)
+                }
+                return
+            }
+            task.waitUntilExit()
+            let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            let ids = output
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.lowercased().hasPrefix("fetching") }
+                .compactMap { $0.split(separator: "\t").first.map(String.init) }
+
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshAgyModelsButton.isEnabled = true
+                self.refreshAgyModelsButton.title = "\u{21BB}"
+                if ids.isEmpty {
+                    self.appDelegate?.showAlert(
+                        title: "Tidak ada model",
+                        message: "Gagal membaca daftar model dari 'agy models'. Pastikan agy terinstall & sudah login."
+                    )
+                    return
+                }
+                let current = self.agyModelField.stringValue
+                self.agyModelField.removeAllItems()
+                self.agyModelField.addItems(withObjectValues: ids)
+                self.agyModelField.stringValue = current
+            }
+        }
+    }
+
+    private func config_agyCliBin() -> String {
+        let content = readEnvFile()
+        let bin = readEnvValue(content, "AGY_CLI_BIN")
+        return bin.isEmpty ? "agy" : bin
     }
 
     /// Nonaktifkan field model yang TIDAK relevan dengan mode Claude yang sedang dipilih -
@@ -987,6 +1062,9 @@ class SettingsWindowController: NSWindowController {
         openaiModelField.removeAllItems()
         openaiModelField.stringValue = readEnvValue(content, "OPENAI_MODEL")
 
+        agyModelField.removeAllItems()
+        agyModelField.stringValue = readEnvValue(content, "AGY_MODEL")
+
         providerChanged()
     }
 
@@ -1005,6 +1083,7 @@ class SettingsWindowController: NSWindowController {
         content = setEnvValue(content, "OPENAI_BASE_URL", openaiBaseURLField.stringValue)
         content = setEnvValue(content, "OPENAI_API_KEY", openaiApiKeyField.stringValue)
         content = setEnvValue(content, "OPENAI_MODEL", openaiModelField.stringValue)
+        content = setEnvValue(content, "AGY_MODEL", agyModelField.stringValue)
         return content
     }
 
