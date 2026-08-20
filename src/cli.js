@@ -39,7 +39,7 @@ function applyModelOverride(model) {
 program
   .name("meetresult")
   .description(
-    "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis (mirip Krisp.ai), Bahasa Indonesia."
+    "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis, Bahasa Indonesia."
   )
   .version("1.5.1");
 
