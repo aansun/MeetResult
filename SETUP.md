@@ -270,6 +270,13 @@ TRANSCRIBE_FALLBACK_PROVIDER=whisper
 
 **Rekomendasi**: kalau provider utama cloud (Gemini/OpenAI), pakai `whisper` sebagai fallback — karena Whisper lokal tidak pernah kehabisan kuota/koneksi, transkripsi hampir pasti berhasil walau cloud sedang bermasalah. Kosongkan `TRANSCRIBE_FALLBACK_PROVIDER` untuk nonaktifkan (default).
 
+**Model Whisper khusus untuk fallback**: kalau fallback-nya `whisper`, kamu bisa pakai model yang BEDA dari `WHISPER_MODEL` biasa lewat `WHISPER_FALLBACK_MODEL` (atau field "Model Whisper (Fallback)" di menu tray Pengaturan) - berguna kalau mau model utama paling akurat (mis. `large-v3`) tapi fallback darurat pakai model lebih cepat (mis. `medium`), supaya skenario cloud-down tidak ikut menunggu lama. Kosongkan untuk pakai model yang sama seperti `WHISPER_MODEL`.
+
+```
+WHISPER_MODEL=large-v3
+WHISPER_FALLBACK_MODEL=medium
+```
+
 ## 6. Setup Kalender
 
 MeetResult mendukung 2 cara membaca kalender Outlook. Set lewat `CALENDAR_MODE` di `.env`.

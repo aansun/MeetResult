@@ -130,6 +130,12 @@ module.exports = {
     hotwords: process.env.WHISPER_HOTWORDS || "",
     // Contoh kalimat/gaya bahasa di awal audio untuk bias model ke domain/istilah tertentu
     initialPrompt: process.env.WHISPER_INITIAL_PROMPT || "",
+    // Model KHUSUS dipakai kalau Whisper berperan sebagai FALLBACK (TRANSCRIBE_FALLBACK_
+    // PROVIDER=whisper) - kosongkan untuk pakai model yang sama dengan `model` di atas.
+    // Berguna kalau primary-nya cloud (Gemini/OpenAI) dan kamu mau fallback pakai model
+    // lebih kecil/cepat (mis. "medium") daripada model utama yang lebih besar (mis.
+    // "large-v3") - supaya skenario darurat fallback tidak ikut lambat.
+    fallbackModel: process.env.WHISPER_FALLBACK_MODEL || "",
   },
 
   ffmpeg: {

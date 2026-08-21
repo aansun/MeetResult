@@ -14,14 +14,15 @@ const { transcribeWithOpenAi } = require("./openaiTranscriber");
  *   - Ringan (tanpa PyTorch), cepat, cocok untuk Apple Silicon.
  * Alternatif: `whisper` (openai-whisper asli, lebih berat, butuh flag --fp16).
  */
-function transcribeWithWhisper(audioFilePath, outDir) {
+function transcribeWithWhisper(audioFilePath, outDir, modelOverride) {
   return new Promise((resolve, reject) => {
     const isClassicWhisper = /(^|\/)whisper$/.test(config.whisper.bin);
+    const model = modelOverride || config.whisper.model;
 
     const args = [
       audioFilePath,
       "--model",
-      config.whisper.model,
+      model,
       "--language",
       config.whisper.language, // "id" untuk Bahasa Indonesia
       "--task",
@@ -58,7 +59,7 @@ function transcribeWithWhisper(audioFilePath, outDir) {
     }
 
     logger.info(
-      `Menjalankan transkripsi Whisper (model=${config.whisper.model}, bahasa=${config.whisper.language}, batched=${config.whisper.batched}, vad=${config.whisper.vadFilter})...`
+      `Menjalankan transkripsi Whisper (model=${model}, bahasa=${config.whisper.language}, batched=${config.whisper.batched}, vad=${config.whisper.vadFilter})...`
     );
 
     const proc = spawn(config.whisper.bin, args);
@@ -108,15 +109,17 @@ async function transcribeWithCloudToFile(audioFilePath, outDir, transcribeFn) {
 /**
  * Transkrip lewat SATU provider tertentu (bukan cuma yang lagi aktif di config) - dipisah
  * supaya bisa dipakai ulang untuk provider fallback (lihat transcribeAudio() di bawah).
+ * `whisperModelOverride` dipakai supaya fallback Whisper bisa pakai model BERBEDA dari
+ * WHISPER_MODEL biasa (mis. model lebih kecil/cepat khusus untuk skenario darurat fallback).
  */
-async function transcribeWithProvider(providerName, audioFilePath, outDir) {
+async function transcribeWithProvider(providerName, audioFilePath, outDir, whisperModelOverride) {
   if (providerName === "gemini") {
     return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithGemini);
   }
   if (providerName === "openai") {
     return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithOpenAi);
   }
-  return transcribeWithWhisper(audioFilePath, outDir);
+  return transcribeWithWhisper(audioFilePath, outDir, whisperModelOverride);
 }
 
 /**
@@ -147,7 +150,8 @@ async function transcribeAudio(audioFilePath) {
 
     logger.warn(`Transkripsi via '${primary}' gagal (${err.message}) - mencoba fallback '${fallback}'...`);
     try {
-      return await transcribeWithProvider(fallback, audioFilePath, outDir);
+      const fallbackWhisperModel = fallback === "whisper" ? config.whisper.fallbackModel : undefined;
+      return await transcribeWithProvider(fallback, audioFilePath, outDir, fallbackWhisperModel);
     } catch (fallbackErr) {
       throw new Error(
         `Transkripsi gagal di provider utama ('${primary}': ${err.message}) DAN fallback ('${fallback}': ${fallbackErr.message}).`

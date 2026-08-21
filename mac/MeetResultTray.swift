@@ -782,6 +782,11 @@ class SettingsWindowController: NSWindowController {
     let whisperModelField = NSComboBox()
     let whisperStatusLabel = NSTextField(labelWithString: "")
     let whisperActionButton = NSButton(title: "Cek Status", target: nil, action: nil)
+    // Model Whisper KHUSUS untuk fallback (bisa beda dari model primary di atas, mis. model
+    // lebih kecil/cepat untuk skenario darurat) - lihat WHISPER_FALLBACK_MODEL.
+    let whisperFallbackModelField = NSComboBox()
+    let whisperFallbackStatusLabel = NSTextField(labelWithString: "")
+    let whisperFallbackActionButton = NSButton(title: "Cek Status", target: nil, action: nil)
     let geminiApiKeyField = NSSecureTextField(string: "")
     let geminiModelField = NSTextField(string: "")
     let openaiTranscribeApiKeyField = NSSecureTextField(string: "")
@@ -791,12 +796,14 @@ class SettingsWindowController: NSWindowController {
     var openaiRows: [NSStackView] = []
     var agyRows: [NSStackView] = []
     var whisperRows: [NSStackView] = []
+    var whisperFallbackRows: [NSStackView] = []
     var geminiRows: [NSStackView] = []
     var openaiTranscribeRows: [NSStackView] = []
     var mainStack: NSStackView!
     private var envSnapshotBeforeTest: String?
     private var envMtimeBeforeTest: Date?
     private var whisperStatusCheckToken = 0
+    private var whisperFallbackStatusCheckToken = 0
 
     convenience init(appDelegate: AppDelegate) {
         let window = NSWindow(
@@ -891,6 +898,8 @@ class SettingsWindowController: NSWindowController {
 
         transcribeFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "whisper", "gemini", "openai"])
         transcribeFallbackPopup.toolTip = "Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - rekomendasi: whisper"
+        transcribeFallbackPopup.target = self
+        transcribeFallbackPopup.action = #selector(transcribeFallbackChanged)
 
         whisperModelField.addItems(withObjectValues: knownWhisperModels)
         whisperModelField.target = self
@@ -903,6 +912,21 @@ class SettingsWindowController: NSWindowController {
         let whisperStatusRow = NSStackView(views: [NSView(), whisperStatusLabel])
         whisperStatusRow.orientation = .horizontal
         whisperRows = [whisperModelRow, whisperStatusRow]
+
+        // Model Whisper khusus untuk peran FALLBACK - kosongkan untuk pakai model yang sama
+        // dengan "Model Whisper (lokal)" di atas (lihat WHISPER_FALLBACK_MODEL).
+        whisperFallbackModelField.addItems(withObjectValues: knownWhisperModels)
+        whisperFallbackModelField.placeholderString = "kosongkan untuk pakai model yang sama seperti di atas"
+        whisperFallbackModelField.target = self
+        whisperFallbackModelField.action = #selector(whisperFallbackModelChanged)
+        whisperFallbackActionButton.target = self
+        whisperFallbackActionButton.action = #selector(whisperFallbackActionButtonClicked)
+        whisperFallbackStatusLabel.font = NSFont.systemFont(ofSize: 11)
+        whisperFallbackStatusLabel.textColor = .secondaryLabelColor
+        let whisperFallbackModelRow = row("Model Whisper (Fallback):", whisperFallbackModelField, trailing: whisperFallbackActionButton)
+        let whisperFallbackStatusRow = NSStackView(views: [NSView(), whisperFallbackStatusLabel])
+        whisperFallbackStatusRow.orientation = .horizontal
+        whisperFallbackRows = [whisperFallbackModelRow, whisperFallbackStatusRow]
 
         geminiModelField.placeholderString = "cek nama model audio-capable terbaru di Google AI Studio"
         openaiTranscribeApiKeyField.placeholderString = "kosongkan untuk pakai API Key OpenAI notulen di atas"
@@ -948,6 +972,7 @@ class SettingsWindowController: NSWindowController {
             row("Provider Transkripsi:", transcribeProviderPopup),
             row("Fallback Transkripsi:", transcribeFallbackPopup),
             whisperRows[0], whisperRows[1],
+            whisperFallbackRows[0], whisperFallbackRows[1],
             geminiRows[0], geminiRows[1],
             openaiTranscribeRows[0], openaiTranscribeRows[1],
             separator(),
@@ -1002,24 +1027,65 @@ class SettingsWindowController: NSWindowController {
         resizeToFitContent()
     }
 
+    /// Toggle field "Model Whisper (Fallback)" - independen dari transcribeProviderChanged()
+    /// karena fallback bisa "whisper" walau provider utamanya BUKAN whisper (mis. utama Gemini,
+    /// fallback Whisper lokal) - lihat WHISPER_FALLBACK_MODEL di config.js.
+    @objc func transcribeFallbackChanged() {
+        let selected = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
+        whisperFallbackRows.forEach { $0.isHidden = selected != "whisper" }
+        if selected == "whisper" {
+            checkWhisperFallbackModelStatus()
+        }
+        resizeToFitContent()
+    }
+
     @objc func whisperModelChanged() {
         checkWhisperModelStatus()
     }
 
-    /// Cek apakah model Whisper yang sedang diisi di form sudah ada di cache lokal, lewat
-    /// `meetresult whisper-status` (bukan cek manual folder cache - biar konsisten dengan
-    /// logika resolve model yang sebenarnya dipakai faster-whisper). `token` mencegah race
-    /// kalau user ganti-ganti model dengan cepat - hanya hasil pengecekan TERAKHIR yang dipakai.
+    @objc func whisperFallbackModelChanged() {
+        checkWhisperFallbackModelStatus()
+    }
+
     private func checkWhisperModelStatus() {
-        let model = whisperModelField.stringValue.trimmingCharacters(in: .whitespaces)
+        checkWhisperModelStatus(
+            modelField: whisperModelField, statusLabel: whisperStatusLabel, actionButton: whisperActionButton,
+            bumpToken: { [weak self] in
+                self?.whisperStatusCheckToken += 1
+                return self?.whisperStatusCheckToken ?? 0
+            },
+            isCurrentToken: { [weak self] t in t == self?.whisperStatusCheckToken }
+        )
+    }
+
+    private func checkWhisperFallbackModelStatus() {
+        checkWhisperModelStatus(
+            modelField: whisperFallbackModelField, statusLabel: whisperFallbackStatusLabel, actionButton: whisperFallbackActionButton,
+            bumpToken: { [weak self] in
+                self?.whisperFallbackStatusCheckToken += 1
+                return self?.whisperFallbackStatusCheckToken ?? 0
+            },
+            isCurrentToken: { [weak self] t in t == self?.whisperFallbackStatusCheckToken }
+        )
+    }
+
+    /// Cek apakah model Whisper yang sedang diisi di `modelField` sudah ada di cache lokal,
+    /// lewat `meetresult whisper-status` (bukan cek manual folder cache - biar konsisten dengan
+    /// logika resolve model yang sebenarnya dipakai faster-whisper). Dipakai bareng oleh field
+    /// Model Whisper primary DAN fallback - `bumpToken`/`isCurrentToken` mencegah race kalau
+    /// user ganti-ganti model dengan cepat (masing-masing field punya token counter sendiri).
+    private func checkWhisperModelStatus(
+        modelField: NSComboBox, statusLabel: NSTextField, actionButton: NSButton,
+        bumpToken: @escaping () -> Int, isCurrentToken: @escaping (Int) -> Bool
+    ) {
+        let model = modelField.stringValue.trimmingCharacters(in: .whitespaces)
         guard !model.isEmpty else {
-            whisperStatusLabel.stringValue = ""
+            statusLabel.stringValue = ""
             return
         }
-        whisperStatusCheckToken += 1
-        let myToken = whisperStatusCheckToken
-        whisperStatusLabel.stringValue = "Mengecek status model..."
-        whisperActionButton.isEnabled = false
+        let myToken = bumpToken()
+        statusLabel.stringValue = "Mengecek status model..."
+        actionButton.isEnabled = false
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -1036,44 +1102,61 @@ class SettingsWindowController: NSWindowController {
             let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
             DispatchQueue.main.async {
-                guard let self = self, myToken == self.whisperStatusCheckToken else { return }
-                self.whisperActionButton.isEnabled = true
+                guard let self = self, isCurrentToken(myToken) else { return }
+                actionButton.isEnabled = true
                 guard let jsonData = output.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
                       let cached = json["cached"] as? Bool else {
-                    self.whisperStatusLabel.stringValue = "\u{26A0}\u{FE0F} Gagal cek status (python3/faster-whisper tidak ditemukan)"
-                    self.whisperActionButton.title = "Cek Status"
+                    statusLabel.stringValue = "\u{26A0}\u{FE0F} Gagal cek status (python3/faster-whisper tidak ditemukan)"
+                    actionButton.title = "Cek Status"
                     return
                 }
                 if cached {
-                    self.whisperStatusLabel.stringValue = "\u{2705} Model sudah tersedia di lokal"
-                    self.whisperActionButton.title = "Cek Status"
+                    statusLabel.stringValue = "\u{2705} Model sudah tersedia di lokal"
+                    actionButton.title = "Cek Status"
                 } else {
-                    self.whisperStatusLabel.stringValue = "\u{2B07}\u{FE0F} Belum diunduh - klik \"Unduh\" untuk unduh sekarang"
-                    self.whisperActionButton.title = "Unduh"
+                    statusLabel.stringValue = "\u{2B07}\u{FE0F} Belum diunduh - klik \"Unduh\" untuk unduh sekarang"
+                    actionButton.title = "Unduh"
                 }
                 self.resizeToFitContent()
             }
         }
     }
 
-    /// Tombol Model Whisper: "Cek Status" cuma mengecek ulang, "Unduh" memicu unduhan nyata
-    /// (bisa beberapa menit & GB tergantung model) lewat `meetresult whisper-download`.
+    /// Tombol Model Whisper (primary): "Cek Status" cuma mengecek ulang, "Unduh" memicu
+    /// unduhan nyata (bisa beberapa menit & GB tergantung model) lewat `meetresult whisper-download`.
     @objc func whisperActionButtonClicked() {
         if whisperActionButton.title == "Unduh" {
-            downloadWhisperModel()
+            downloadWhisperModel(
+                modelField: whisperModelField, statusLabel: whisperStatusLabel, actionButton: whisperActionButton,
+                onDone: { [weak self] in self?.checkWhisperModelStatus() }
+            )
         } else {
             checkWhisperModelStatus()
         }
     }
 
-    private func downloadWhisperModel() {
-        let model = whisperModelField.stringValue.trimmingCharacters(in: .whitespaces)
+    /// Sama seperti whisperActionButtonClicked(), tapi untuk field Model Whisper (Fallback).
+    @objc func whisperFallbackActionButtonClicked() {
+        if whisperFallbackActionButton.title == "Unduh" {
+            downloadWhisperModel(
+                modelField: whisperFallbackModelField, statusLabel: whisperFallbackStatusLabel, actionButton: whisperFallbackActionButton,
+                onDone: { [weak self] in self?.checkWhisperFallbackModelStatus() }
+            )
+        } else {
+            checkWhisperFallbackModelStatus()
+        }
+    }
+
+    private func downloadWhisperModel(
+        modelField: NSComboBox, statusLabel: NSTextField, actionButton: NSButton, onDone: @escaping () -> Void
+    ) {
+        let model = modelField.stringValue.trimmingCharacters(in: .whitespaces)
         guard !model.isEmpty else { return }
 
-        whisperActionButton.isEnabled = false
-        whisperActionButton.title = "Mengunduh..."
-        whisperStatusLabel.stringValue = "Mengunduh model '\(model)' - bisa beberapa menit tergantung ukuran model & koneksi..."
+        actionButton.isEnabled = false
+        actionButton.title = "Mengunduh..."
+        statusLabel.stringValue = "Mengunduh model '\(model)' - bisa beberapa menit tergantung ukuran model & koneksi..."
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -1089,20 +1172,19 @@ class SettingsWindowController: NSWindowController {
             } catch {
                 DispatchQueue.main.async {
                     self?.appDelegate?.showAlert(title: "Gagal Mengunduh", message: error.localizedDescription)
-                    self?.checkWhisperModelStatus()
+                    onDone()
                 }
                 return
             }
             task.waitUntilExit()
             DispatchQueue.main.async {
-                guard let self = self else { return }
                 if task.terminationStatus != 0 {
-                    self.appDelegate?.showAlert(
+                    self?.appDelegate?.showAlert(
                         title: "Gagal Mengunduh Model",
                         message: "Unduhan model '\(model)' gagal (kode \(task.terminationStatus)). Cek koneksi internet & coba lagi."
                     )
                 }
-                self.checkWhisperModelStatus()
+                onDone()
             }
         }
     }
@@ -1273,12 +1355,14 @@ class SettingsWindowController: NSWindowController {
 
         let whisperModel = readEnvValue(content, "WHISPER_MODEL")
         whisperModelField.stringValue = whisperModel.isEmpty ? "large-v3" : whisperModel
+        whisperFallbackModelField.stringValue = readEnvValue(content, "WHISPER_FALLBACK_MODEL")
         geminiApiKeyField.stringValue = readEnvValue(content, "GEMINI_API_KEY")
         geminiModelField.stringValue = readEnvValue(content, "GEMINI_MODEL")
         openaiTranscribeApiKeyField.stringValue = readEnvValue(content, "OPENAI_TRANSCRIBE_API_KEY")
         openaiTranscribeModelField.stringValue = readEnvValue(content, "OPENAI_TRANSCRIBE_MODEL")
 
         transcribeProviderChanged()
+        transcribeFallbackChanged()
     }
 
     /// Terapkan isi form SEKARANG ke teks .env (belum ditulis ke disk) - dipakai bareng oleh
@@ -1303,6 +1387,7 @@ class SettingsWindowController: NSWindowController {
         let transcribeFallbackValue = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
         content = setEnvValue(content, "TRANSCRIBE_FALLBACK_PROVIDER", transcribeFallbackValue == fallbackDisabledLabel ? "" : transcribeFallbackValue)
         content = setEnvValue(content, "WHISPER_MODEL", whisperModelField.stringValue)
+        content = setEnvValue(content, "WHISPER_FALLBACK_MODEL", whisperFallbackModelField.stringValue)
         content = setEnvValue(content, "GEMINI_API_KEY", geminiApiKeyField.stringValue)
         content = setEnvValue(content, "GEMINI_MODEL", geminiModelField.stringValue)
         content = setEnvValue(content, "OPENAI_TRANSCRIBE_API_KEY", openaiTranscribeApiKeyField.stringValue)
