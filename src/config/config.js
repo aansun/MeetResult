@@ -98,13 +98,18 @@ module.exports = {
 
   whisper: {
     bin: process.env.WHISPER_BIN || "whisper",
-    model: process.env.WHISPER_MODEL || "medium",
+    model: process.env.WHISPER_MODEL || "large-v3",
     language: process.env.WHISPER_LANGUAGE || "id",
     // Batched inference: percepat 2-4x untuk audio panjang (hanya didukung whisper-ctranslate2)
     batched: (process.env.WHISPER_BATCHED || "true") === "true",
     batchSize: Number(process.env.WHISPER_BATCH_SIZE || 8),
     // VAD filter: skip bagian hening/silence -> lebih cepat & kurangi halusinasi teks
     vadFilter: (process.env.WHISPER_VAD_FILTER || "true") === "true",
+    // Kata/frasa yang sering salah transkrip (mis. nama tokoh, istilah asing/Arab) - dikasih
+    // hint ke model biar diprioritaskan. Contoh: "Taqiyuddin an-Nabhani, Al-Khaliq, khilafah"
+    hotwords: process.env.WHISPER_HOTWORDS || "",
+    // Contoh kalimat/gaya bahasa di awal audio untuk bias model ke domain/istilah tertentu
+    initialPrompt: process.env.WHISPER_INITIAL_PROMPT || "",
   },
 
   ffmpeg: {

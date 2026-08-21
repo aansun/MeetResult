@@ -29,7 +29,7 @@ Dokumen ini berisi detail instalasi, konfigurasi, dan referensi pemakaian MeetRe
   python3 -m pip install --user -U whisper-ctranslate2
   whisper-ctranslate2 --help   # cek berhasil terinstall
   ```
-  Model yang direkomendasikan: **`medium`** — akurasi bagus untuk Bahasa Indonesia, tetap cepat di chip Apple Silicon (M1/M2/M3/M4/M5). Gunakan `small` jika ingin lebih cepat dengan akurasi sedikit lebih rendah, atau `large-v3` jika butuh akurasi maksimal (lebih berat/lambat).
+  Model default: **`large-v3`** — paling akurat, terutama untuk nama/istilah khusus (lihat perbandingan nyata di bagian [13. Performa](#13-performa-untuk-meeting-panjang-2-jam)), tapi ~4x lebih lambat dari `medium` dan modelnya ~2x lebih besar (unduhan pertama kali ~2.9GB vs ~1.4GB). Gunakan `medium` kalau lebih mengutamakan kecepatan (mis. meeting sangat panjang/rutin), atau `small` untuk paling cepat dengan akurasi lebih rendah.
 - **macOS**: agar bisa merekam **audio sistem** (suara Teams, bukan cuma mic), install virtual audio device:
   ```bash
   brew install blackhole-2ch
@@ -191,7 +191,19 @@ MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription
 
 > Catatan teknis: `agy` menerima prompt lewat **argumen command**, bukan stdin (beda dari Claude CLI) — MeetResult sudah menangani ini otomatis, cuma relevan kalau kamu ingin tahu cara kerjanya.
 
-## 5. Transkripsi via Gemini (opsional)
+## 5. Akurasi Transkripsi & Alternatif Gemini
+
+### Bantu Whisper mengenali istilah/nama khusus
+
+Whisper cukup akurat untuk kalimat umum, tapi **sering salah untuk nama tokoh dan istilah asing/Arab** yang jarang muncul di data latihnya (mis. nama ulama, judul kitab) - kadang sampai mengganti dengan kata yang bunyinya mirip tapi maknanya jauh berbeda. Kalau konten kamu banyak istilah spesifik seperti ini, isi `.env`:
+
+```
+WHISPER_HOTWORDS=Taqiyuddin an-Nabhani, Al-Khaliq, khilafah, kaffah, Rib'i bin Amir
+```
+
+Ini membantu **signifikan** (terverifikasi: 4 dari 7 istilah bermasalah langsung terkoreksi di sebuah tes nyata), tapi **tidak menjamin 100% benar** - istilah yang bunyinya sangat mirip kata umum lain (mis. nama Allah "Al-Khaliq" vs kata "alkoholik") kadang tetap salah walau sudah dikasih hint. Kalau butuh akurasi lebih tinggi untuk konten seperti ini, pertimbangkan `TRANSCRIBE_PROVIDER=gemini` di bawah - pada pengujian yang sama, Gemini konsisten benar untuk semua istilah tersebut.
+
+### Transkripsi via Gemini (opsional)
 
 Default transkripsi (audio→teks) tetap **Whisper** (lokal, offline, gratis) - lihat [Prasyarat](#1-prasyarat). Sebagai alternatif, kamu bisa pakai **Gemini API** untuk transkripsi: Gemini bisa menerima file audio secara langsung (native audio understanding), beda dari Claude yang cuma menerima teks/gambar.
 
@@ -496,7 +508,18 @@ Audio **tidak dipecah manual** — Whisper secara arsitektur internal sudah memp
 | Peak RAM | ~5.7 GB (dari 16GB, sekitar 35%, hanya sesaat) |
 | CPU | Multi-core (tidak membebani 1 core saja) |
 
-Kalau RAM terbatas (≤8GB) atau ingin lebih ringan, kecilkan `WHISPER_BATCH_SIZE` ke `4`, atau turunkan `WHISPER_MODEL` ke `small`.
+**Perbandingan dengan `large-v3`** (model default saat ini, MacBook Apple M5, audio lain 12 menit 3 detik, setting `WHISPER_BATCHED`/`WHISPER_VAD_FILTER` sama):
+
+| Metrik | `medium` | `large-v3` |
+|---|---|---|
+| Waktu transkripsi | ~1x kecepatan proporsional | **~4.2x lebih lambat** dari `medium` |
+| Kecepatan vs real-time | ~6.6x lebih cepat | **~1.6x lebih cepat** (masih lebih cepat dari durasi audio, tapi jauh lebih tipis marginnya) |
+| Estimasi meeting 2 jam | ~18 menit | **~1 jam 17 menit** |
+| Ukuran model (unduhan pertama) | ~1.4 GB | **~2.9 GB** |
+
+`large-v3` diverifikasi memperbaiki kesalahan transkripsi istilah Islam/Arab tertentu dibanding `medium` (mis. "Al-Khaliq" tidak lagi terbaca "alkoholik"), tapi **tidak** menjamin semua nama/istilah asing terbaca benar — untuk konten padat istilah spesifik seperti itu, kombinasikan dengan `WHISPER_HOTWORDS`/`WHISPER_INITIAL_PROMPT` (lihat bagian 5), atau pertimbangkan `TRANSCRIBE_PROVIDER=gemini` yang terbukti jauh lebih akurat untuk kasus ini.
+
+Kalau meeting kamu sangat panjang/rutin dan waktu proses lebih penting daripada akurasi maksimal, turunkan `WHISPER_MODEL` ke `medium` (lebih cepat, akurasi tetap baik untuk percakapan umum) atau `small` (paling cepat). Kalau RAM terbatas (≤8GB), kecilkan `WHISPER_BATCH_SIZE` ke `4`.
 
 ## 14. Catatan Penting
 

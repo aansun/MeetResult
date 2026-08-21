@@ -46,6 +46,16 @@ function transcribeWithWhisper(audioFilePath, outDir) {
       }
     }
 
+    // Bantu Whisper mengenali istilah/nama yang sering salah transkrip (mis. nama tokoh,
+    // istilah Arab) - Whisper akurat untuk kalimat umum tapi lemah untuk kosakata spesifik
+    // tanpa hint ini.
+    if (config.whisper.hotwords) {
+      args.push("--hotwords", config.whisper.hotwords);
+    }
+    if (config.whisper.initialPrompt) {
+      args.push("--initial_prompt", config.whisper.initialPrompt);
+    }
+
     logger.info(
       `Menjalankan transkripsi Whisper (model=${config.whisper.model}, bahasa=${config.whisper.language}, batched=${config.whisper.batched}, vad=${config.whisper.vadFilter})...`
     );
