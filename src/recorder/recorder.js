@@ -229,13 +229,32 @@ function stopRecording() {
   return state;
 }
 
+/**
+ * Tunggu proses keluar setelah SIGINT (maks `timeoutMs`). Kalau proses masih hidup
+ * setelah timeout (mis. ffmpeg avfoundation kadang tidak merespons SIGINT dengan
+ * bersih), paksa SIGKILL - jangan biarkan proses ffmpeg jadi orphan yang terus
+ * merekam di background tanpa diketahui (pernah terjadi: rekaman jalan 3+ jam
+ * setelah meeting selesai karena proses mic tidak pernah benar-benar mati).
+ */
 function waitForPidExit(pid, timeoutMs = 15000, intervalMs = 300) {
   return new Promise((resolve) => {
     if (!isPidAlive(pid)) return resolve(true);
     const start = Date.now();
     const timer = setInterval(() => {
-      if (!isPidAlive(pid) || Date.now() - start > timeoutMs) {
+      if (!isPidAlive(pid)) {
         clearInterval(timer);
+        return resolve(true);
+      }
+      if (Date.now() - start > timeoutMs) {
+        clearInterval(timer);
+        if (isPidAlive(pid)) {
+          logger.warn(
+            `Proses ffmpeg (PID ${pid}) tidak berhenti dalam ${timeoutMs}ms setelah SIGINT - memaksa kill (SIGKILL).`
+          );
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch (e) {}
+        }
         resolve(true);
       }
     }, intervalMs);
