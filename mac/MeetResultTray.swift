@@ -29,6 +29,20 @@ let manualLogFile = dataDir + "/manual-record.log"
 let nodeBin = "node"
 let cliScript = "bin/meetresult.js"
 
+/// Environment dictionary standar dipakai semua subprocess yang di-spawn tray (node/agy CLI) -
+/// PATH diperluas ke lokasi umum tool CLI (Homebrew, pip user-install, dsb), dan NODE_OPTIONS
+/// menekan ExperimentalWarning bawaan Node soal `localStorage` yang muncul akibat dependency
+/// `docx` menyentuh globalThis.localStorage saat di-load - tidak relevan sama sekali dengan
+/// MeetResult, cuma bikin log/output subprocess berisik.
+func subprocessEnvironment(
+    extraPaths: String = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
+) -> [String: String] {
+    var env = ProcessInfo.processInfo.environment
+    env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+    env["NODE_OPTIONS"] = "--disable-warning=ExperimentalWarning"
+    return env
+}
+
 func statusIcon(_ status: String) -> String {
     switch status {
     case "scheduled": return "\u{1F5D3}\u{FE0F}"   // 🗓️
@@ -510,10 +524,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         task.arguments = [nodeBin, cliScript] + args
         task.currentDirectoryURL = URL(fileURLWithPath: projectDir)
 
-        var env = ProcessInfo.processInfo.environment
-        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
-        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-        task.environment = env
+        task.environment = subprocessEnvironment()
 
         if !fm.fileExists(atPath: logPath) {
             fm.createFile(atPath: logPath, contents: nil)
@@ -696,10 +707,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         task.arguments = [nodeBin, cliScript, "update"]
         task.currentDirectoryURL = URL(fileURLWithPath: projectDir)
 
-        var env = ProcessInfo.processInfo.environment
-        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
-        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-        task.environment = env
+        task.environment = subprocessEnvironment()
 
         let pipe = Pipe()
         task.standardOutput = pipe
@@ -1017,6 +1025,7 @@ class SettingsWindowController: NSWindowController {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         task.arguments = [nodeBin, cliScript, "whisper-status", "--model", model]
         task.currentDirectoryURL = URL(fileURLWithPath: projectDir)
+        task.environment = subprocessEnvironment()
         let stdoutPipe = Pipe()
         task.standardOutput = stdoutPipe
         task.standardError = Pipe()
@@ -1070,6 +1079,7 @@ class SettingsWindowController: NSWindowController {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         task.arguments = [nodeBin, cliScript, "whisper-download", "--model", model]
         task.currentDirectoryURL = URL(fileURLWithPath: projectDir)
+        task.environment = subprocessEnvironment()
         task.standardOutput = Pipe()
         task.standardError = Pipe()
 
@@ -1106,10 +1116,9 @@ class SettingsWindowController: NSWindowController {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         task.arguments = [config_agyCliBin(), "models"]
-        var env = ProcessInfo.processInfo.environment
-        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
-        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-        task.environment = env
+        task.environment = subprocessEnvironment(
+            extraPaths: "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
+        )
 
         let stdoutPipe = Pipe()
         task.standardOutput = stdoutPipe
@@ -1351,10 +1360,7 @@ class SettingsWindowController: NSWindowController {
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         task.arguments = [nodeBin, cliScript, "test-ai", "--json"]
         task.currentDirectoryURL = URL(fileURLWithPath: projectDir)
-        var env = ProcessInfo.processInfo.environment
-        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
-        env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-        task.environment = env
+        task.environment = subprocessEnvironment()
 
         let stdoutPipe = Pipe()
         task.standardOutput = stdoutPipe
