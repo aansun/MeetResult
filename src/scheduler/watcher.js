@@ -8,8 +8,23 @@ const { runPipelineForMeeting } = require("../pipeline");
 const { cleanupOldRecordings } = require("../utils/retention");
 const { isTeamsRunning } = require("../utils/teamsDetect");
 const { hasRecentAudioActivity } = require("../utils/audioActivity");
+const { checkAndRepairClaudeCliSymlinks } = require("../utils/claudeCliHealth");
 
 let stopTimer = null;
+
+/**
+ * Cek & perbaiki otomatis symlink `claude` CLI kalau rusak akibat Claude Desktop auto-update
+ * (lihat claudeCliHealth.js) - hanya relevan kalau Claude CLI benar-benar dipakai (mode "cli"
+ * untuk notulen, primary ATAU fallback), supaya tidak melakukan cek sia-sia untuk setup yang
+ * tidak pakai Claude CLI sama sekali.
+ */
+function selfHealClaudeCliIfRelevant() {
+  const usesClaudeCli =
+    config.claude.mode === "cli" &&
+    (config.ai.provider === "claude" || config.ai.fallbackProvider === "claude");
+  if (!usesClaudeCli) return;
+  checkAndRepairClaudeCliSymlinks();
+}
 
 /**
  * Hentikan rekaman aktif TANPA lanjut ke transkrip+notulen - dipakai saat mekanisme deteksi
@@ -86,6 +101,8 @@ async function stopActiveRecording(record) {
 
 async function checkAndAct() {
   try {
+    selfHealClaudeCliIfRelevant();
+
     // --- Reconcile / jaring pengaman ---
     // Cek apakah ada rekaman aktif yang SEHARUSNYA sudah berhenti (sudah lewat jadwal
     // selesai meeting), tapi timer auto-stop-nya "hilang" - ini bisa terjadi kalau proses
