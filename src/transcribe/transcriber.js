@@ -106,9 +106,28 @@ async function transcribeWithCloudToFile(audioFilePath, outDir, transcribeFn) {
 }
 
 /**
+ * Transkrip lewat SATU provider tertentu (bukan cuma yang lagi aktif di config) - dipisah
+ * supaya bisa dipakai ulang untuk provider fallback (lihat transcribeAudio() di bawah).
+ */
+async function transcribeWithProvider(providerName, audioFilePath, outDir) {
+  if (providerName === "gemini") {
+    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithGemini);
+  }
+  if (providerName === "openai") {
+    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithOpenAi);
+  }
+  return transcribeWithWhisper(audioFilePath, outDir);
+}
+
+/**
  * Transkrip file audio jadi teks - dispatch ke Whisper (default, lokal/offline), Gemini
  * (TRANSCRIBE_PROVIDER=gemini, cloud, butuh GEMINI_API_KEY), atau OpenAI (TRANSCRIBE_PROVIDER=
  * openai, cloud, butuh OPENAI_API_KEY, endpoint Audio Transcriptions).
+ *
+ * Kalau provider utama gagal (error teknis, kuota habis, dll) DAN TRANSCRIBE_FALLBACK_PROVIDER
+ * diisi, otomatis dicoba ulang lewat provider fallback tersebut - rekomendasi: pakai "whisper"
+ * (lokal) sebagai fallback kalau provider utama cloud (gemini/openai), supaya transkripsi
+ * TETAP berhasil walau cloud sedang down atau kuota habis.
  */
 async function transcribeAudio(audioFilePath) {
   if (!fs.existsSync(audioFilePath)) {
@@ -118,14 +137,23 @@ async function transcribeAudio(audioFilePath) {
   // Kelompokkan transkrip per bulan berdasarkan tanggal rekaman (mtime file audio) -
   // supaya data/transcripts/ tidak menumpuk jadi 1 folder besar seiring waktu.
   const outDir = monthSubdir(config.TRANSCRIPTS_DIR, fs.statSync(audioFilePath).mtime);
+  const primary = config.transcribe.provider;
 
-  if (config.transcribe.provider === "gemini") {
-    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithGemini);
+  try {
+    return await transcribeWithProvider(primary, audioFilePath, outDir);
+  } catch (err) {
+    const fallback = config.transcribe.fallbackProvider;
+    if (!fallback || fallback === primary) throw err;
+
+    logger.warn(`Transkripsi via '${primary}' gagal (${err.message}) - mencoba fallback '${fallback}'...`);
+    try {
+      return await transcribeWithProvider(fallback, audioFilePath, outDir);
+    } catch (fallbackErr) {
+      throw new Error(
+        `Transkripsi gagal di provider utama ('${primary}': ${err.message}) DAN fallback ('${fallback}': ${fallbackErr.message}).`
+      );
+    }
   }
-  if (config.transcribe.provider === "openai") {
-    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithOpenAi);
-  }
-  return transcribeWithWhisper(audioFilePath, outDir);
 }
 
 module.exports = { transcribeAudio };

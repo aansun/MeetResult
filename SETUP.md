@@ -191,6 +191,17 @@ MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription
 
 > Catatan teknis: `agy` menerima prompt lewat **argumen command**, bukan stdin (beda dari Claude CLI) — MeetResult sudah menangani ini otomatis, cuma relevan kalau kamu ingin tahu cara kerjanya.
 
+### Provider Backup (Fallback) untuk Notulen
+
+Kalau provider utama gagal (error teknis, kuota habis, dll), MeetResult bisa otomatis mencoba ulang lewat provider backup, supaya notulen tetap berhasil dibuat. Atur lewat menu tray **Pengaturan** ("Provider Fallback") atau `.env`:
+
+```
+SUMMARY_PROVIDER=agy
+SUMMARY_FALLBACK_PROVIDER=claude
+```
+
+Kosongkan `SUMMARY_FALLBACK_PROVIDER` untuk nonaktifkan (default). Kalau primary DAN fallback sama-sama gagal, error dari keduanya digabung di pesan errornya supaya jelas penyebabnya.
+
 ## 5. Akurasi Transkripsi: Local (Whisper) vs Cloud (Gemini/OpenAI)
 
 Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Pengaturan** atau langsung di `.env`. Ada 3 pilihan - semua sudah diverifikasi lewat tes nyata di audio yang sama (podcast padat istilah Arab/Islami, lihat tabel di bawah):
@@ -247,6 +258,17 @@ Model `WHISPER_MODEL` (mis. `large-v3`) diunduh **otomatis** dari Hugging Face s
 meetresult whisper-status --model large-v3   # cek status
 meetresult whisper-download --model large-v3 # unduh sekarang
 ```
+
+### Provider Backup (Fallback) untuk Transkripsi
+
+Kalau provider transkripsi utama gagal (error teknis, kuota API habis, internet putus, dll), MeetResult bisa otomatis mencoba ulang lewat provider backup, supaya transkripsi tetap berhasil dibuat. Atur lewat menu tray **Pengaturan** ("Fallback Transkripsi") atau `.env`:
+
+```
+TRANSCRIBE_PROVIDER=gemini
+TRANSCRIBE_FALLBACK_PROVIDER=whisper
+```
+
+**Rekomendasi**: kalau provider utama cloud (Gemini/OpenAI), pakai `whisper` sebagai fallback — karena Whisper lokal tidak pernah kehabisan kuota/koneksi, transkripsi hampir pasti berhasil walau cloud sedang bermasalah. Kosongkan `TRANSCRIBE_FALLBACK_PROVIDER` untuk nonaktifkan (default).
 
 ## 6. Setup Kalender
 

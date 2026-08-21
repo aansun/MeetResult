@@ -48,6 +48,10 @@ module.exports = {
     //   ini, lihat konfigurasi `agy.*` di bawah - sama seperti CLAUDE_MODE=cli, ini shell-out
     //   ke binary resmi yang sudah user install & login sendiri, bukan reverse-engineer OAuth.
     provider: (process.env.SUMMARY_PROVIDER || "claude").toLowerCase(),
+    // Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - kosongkan
+    // untuk nonaktifkan fallback. Kalau diisi (mis. "claude") dan berbeda dari provider utama,
+    // notulen otomatis dicoba ulang lewat provider ini sebelum benar-benar gagal.
+    fallbackProvider: (process.env.SUMMARY_FALLBACK_PROVIDER || "").toLowerCase(),
   },
 
   claude: {
@@ -105,6 +109,11 @@ module.exports = {
     // GEMINI_API_KEY, lihat `gemini.*`), atau "openai" (cloud, butuh OPENAI_API_KEY, lihat
     // `openai.*` - endpoint Audio Transcriptions, model default whisper-1)
     provider: (process.env.TRANSCRIBE_PROVIDER || "whisper").toLowerCase(),
+    // Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - kosongkan
+    // untuk nonaktifkan fallback. Rekomendasi: isi "whisper" (lokal, tidak pernah kehabisan
+    // kuota) kalau provider utama cloud (gemini/openai), supaya transkripsi TETAP berhasil
+    // walau cloud sedang down/kuota habis.
+    fallbackProvider: (process.env.TRANSCRIBE_FALLBACK_PROVIDER || "").toLowerCase(),
   },
 
   whisper: {

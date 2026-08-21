@@ -87,22 +87,49 @@ async function callClaudeCli(systemPrompt, userPrompt) {
 }
 
 /**
- * Kirim prompt ke provider AI yang aktif (Claude CLI/API, OpenAI-compatible, atau Antigravity
- * CLI) dan kembalikan teks respons mentah. Dipakai baik oleh requestMomFromAI() (ekstraksi
- * awal) maupun polishMomLanguage() (penghalusan bahasa, lihat di bawah).
+ * Kirim prompt ke SATU provider AI tertentu (bukan cuma yang lagi aktif di config) - dipisah
+ * dari askAI() supaya bisa dipakai ulang untuk provider fallback (lihat askAI() di bawah).
  */
-async function askAI(systemPrompt, userPrompt) {
-  const provider = config.ai.provider;
-  if (provider === "openai") {
+async function callProvider(providerName, systemPrompt, userPrompt) {
+  if (providerName === "openai") {
     return askOpenAi(systemPrompt, userPrompt);
   }
-  if (provider === "agy") {
+  if (providerName === "agy") {
     return askAgyCli(`${systemPrompt}\n\n${userPrompt}`);
   }
+  // "claude" (default)
   if (config.claude.mode === "api") {
     return callClaudeApi(systemPrompt, userPrompt);
   }
   return callClaudeCli(systemPrompt, userPrompt);
+}
+
+/**
+ * Kirim prompt ke provider AI yang aktif (Claude CLI/API, OpenAI-compatible, atau Antigravity
+ * CLI) dan kembalikan teks respons mentah. Dipakai baik oleh requestMomFromAI() (ekstraksi
+ * awal) maupun polishMomLanguage() (penghalusan bahasa, lihat di bawah).
+ *
+ * Kalau provider utama gagal (error teknis, kuota habis, dll) DAN SUMMARY_FALLBACK_PROVIDER
+ * diisi, otomatis dicoba ulang lewat provider fallback tersebut sebelum benar-benar gagal -
+ * supaya notulen tetap bisa dibuat walau 1 provider sedang bermasalah.
+ */
+async function askAI(systemPrompt, userPrompt) {
+  const primary = config.ai.provider;
+  try {
+    return await callProvider(primary, systemPrompt, userPrompt);
+  } catch (err) {
+    const fallback = config.ai.fallbackProvider;
+    if (!fallback || fallback === primary) throw err;
+
+    logger.warn(`Provider AI notulen '${primary}' gagal (${err.message}) - mencoba fallback '${fallback}'...`);
+    try {
+      return await callProvider(fallback, systemPrompt, userPrompt);
+    } catch (fallbackErr) {
+      throw new Error(
+        `Provider notulen utama ('${primary}': ${err.message}) DAN fallback ('${fallback}': ${fallbackErr.message}) sama-sama gagal.`
+      );
+    }
+  }
 }
 
 async function requestMomFromAI(transcriptText, meetingMeta = {}) {

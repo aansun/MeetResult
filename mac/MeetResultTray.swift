@@ -76,6 +76,10 @@ let knownWhisperModels = [
 // Model OpenAI Audio Transcriptions yang diketahui - dipakai untuk isi awal dropdown.
 let knownOpenAiTranscribeModels = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1"]
 
+// Label item dropdown Fallback saat fitur backup dinonaktifkan - dipetakan ke string kosong
+// ("") di .env, bukan disimpan sebagai teks ini sendiri.
+let fallbackDisabledLabel = "(Nonaktif)"
+
 /// Baca versi aplikasi dari package.json - dipakai di footer "Tentang" window Pengaturan
 /// supaya tidak perlu diupdate manual tiap kali versi berubah.
 func readAppVersion() -> String {
@@ -752,6 +756,7 @@ class SettingsWindowController: NSWindowController {
     let preparedByField = NSTextField(string: "")
     let orgNameField = NSTextField(string: "")
     let providerPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let summaryFallbackPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let claudeModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let claudeCliModelField = NSComboBox()
     let claudeApiModelField = NSComboBox()
@@ -765,6 +770,7 @@ class SettingsWindowController: NSWindowController {
 
     // --- Transkripsi (Local Whisper / Cloud Gemini / Cloud OpenAI) ---
     let transcribeProviderPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let transcribeFallbackPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let whisperModelField = NSComboBox()
     let whisperStatusLabel = NSTextField(labelWithString: "")
     let whisperActionButton = NSButton(title: "Cek Status", target: nil, action: nil)
@@ -840,6 +846,9 @@ class SettingsWindowController: NSWindowController {
         claudeModePopup.target = self
         claudeModePopup.action = #selector(claudeModeChanged)
 
+        summaryFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "claude", "openai", "agy"])
+        summaryFallbackPopup.toolTip = "Provider backup kalau provider utama gagal (error teknis, kuota habis, dll)"
+
         claudeCliModelField.addItems(withObjectValues: knownClaudeModels)
         claudeApiModelField.addItems(withObjectValues: knownClaudeModels)
         claudeCliModelField.placeholderString = "default Claude Code CLI"
@@ -871,6 +880,9 @@ class SettingsWindowController: NSWindowController {
         transcribeProviderPopup.addItems(withTitles: ["whisper", "gemini", "openai"])
         transcribeProviderPopup.target = self
         transcribeProviderPopup.action = #selector(transcribeProviderChanged)
+
+        transcribeFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "whisper", "gemini", "openai"])
+        transcribeFallbackPopup.toolTip = "Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - rekomendasi: whisper"
 
         whisperModelField.addItems(withObjectValues: knownWhisperModels)
         whisperModelField.target = self
@@ -919,12 +931,14 @@ class SettingsWindowController: NSWindowController {
             separator(),
             sectionLabel("Provider AI (Notulen)"),
             row("Provider:", providerPopup),
+            row("Provider Fallback:", summaryFallbackPopup),
             claudeRows[0], claudeRows[1], claudeRows[2],
             openaiBaseRow, openaiKeyRow, openaiModelRow,
             agyRows[0],
             separator(),
             sectionLabel("Transkripsi (Audio \u{2192} Teks)"),
             row("Provider Transkripsi:", transcribeProviderPopup),
+            row("Fallback Transkripsi:", transcribeFallbackPopup),
             whisperRows[0], whisperRows[1],
             geminiRows[0], geminiRows[1],
             openaiTranscribeRows[0], openaiTranscribeRows[1],
@@ -1223,6 +1237,9 @@ class SettingsWindowController: NSWindowController {
         let provider = readEnvValue(content, "SUMMARY_PROVIDER")
         providerPopup.selectItem(withTitle: provider.isEmpty ? "claude" : provider)
 
+        let summaryFallback = readEnvValue(content, "SUMMARY_FALLBACK_PROVIDER")
+        summaryFallbackPopup.selectItem(withTitle: summaryFallback.isEmpty ? fallbackDisabledLabel : summaryFallback)
+
         let claudeMode = readEnvValue(content, "CLAUDE_MODE")
         claudeModePopup.selectItem(withTitle: claudeMode.isEmpty ? "cli" : claudeMode)
         claudeCliModelField.stringValue = readEnvValue(content, "CLAUDE_CLI_MODEL")
@@ -1241,6 +1258,9 @@ class SettingsWindowController: NSWindowController {
 
         let transcribeProvider = readEnvValue(content, "TRANSCRIBE_PROVIDER")
         transcribeProviderPopup.selectItem(withTitle: transcribeProvider.isEmpty ? "whisper" : transcribeProvider)
+
+        let transcribeFallback = readEnvValue(content, "TRANSCRIBE_FALLBACK_PROVIDER")
+        transcribeFallbackPopup.selectItem(withTitle: transcribeFallback.isEmpty ? fallbackDisabledLabel : transcribeFallback)
 
         let whisperModel = readEnvValue(content, "WHISPER_MODEL")
         whisperModelField.stringValue = whisperModel.isEmpty ? "large-v3" : whisperModel
@@ -1261,6 +1281,8 @@ class SettingsWindowController: NSWindowController {
         content = setEnvValue(content, "MOM_PREPARED_BY", preparedByField.stringValue)
         content = setEnvValue(content, "MOM_ORG_NAME", orgNameField.stringValue)
         content = setEnvValue(content, "SUMMARY_PROVIDER", providerPopup.titleOfSelectedItem ?? "claude")
+        let summaryFallbackValue = summaryFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
+        content = setEnvValue(content, "SUMMARY_FALLBACK_PROVIDER", summaryFallbackValue == fallbackDisabledLabel ? "" : summaryFallbackValue)
         content = setEnvValue(content, "CLAUDE_MODE", claudeModePopup.titleOfSelectedItem ?? "cli")
         content = setEnvValue(content, "CLAUDE_CLI_MODEL", claudeCliModelField.stringValue)
         content = setEnvValue(content, "ANTHROPIC_MODEL", claudeApiModelField.stringValue)
@@ -1269,6 +1291,8 @@ class SettingsWindowController: NSWindowController {
         content = setEnvValue(content, "OPENAI_MODEL", openaiModelField.stringValue)
         content = setEnvValue(content, "AGY_MODEL", agyModelField.stringValue)
         content = setEnvValue(content, "TRANSCRIBE_PROVIDER", transcribeProviderPopup.titleOfSelectedItem ?? "whisper")
+        let transcribeFallbackValue = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
+        content = setEnvValue(content, "TRANSCRIBE_FALLBACK_PROVIDER", transcribeFallbackValue == fallbackDisabledLabel ? "" : transcribeFallbackValue)
         content = setEnvValue(content, "WHISPER_MODEL", whisperModelField.stringValue)
         content = setEnvValue(content, "GEMINI_API_KEY", geminiApiKeyField.stringValue)
         content = setEnvValue(content, "GEMINI_MODEL", geminiModelField.stringValue)
