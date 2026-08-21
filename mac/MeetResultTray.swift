@@ -863,6 +863,8 @@ class SettingsWindowController: NSWindowController {
 
         summaryFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "claude", "openai", "agy"])
         summaryFallbackPopup.toolTip = "Provider backup kalau provider utama gagal (error teknis, kuota habis, dll)"
+        summaryFallbackPopup.target = self
+        summaryFallbackPopup.action = #selector(summaryFallbackChanged)
 
         claudeCliModelField.addItems(withObjectValues: knownClaudeModels)
         claudeApiModelField.addItems(withObjectValues: knownClaudeModels)
@@ -1009,11 +1011,25 @@ class SettingsWindowController: NSWindowController {
     }
 
     @objc func providerChanged() {
-        let selected = providerPopup.titleOfSelectedItem ?? "claude"
-        claudeRows.forEach { $0.isHidden = selected != "claude" }
-        openaiRows.forEach { $0.isHidden = selected != "openai" }
-        agyRows.forEach { $0.isHidden = selected != "agy" }
+        updateNotulenProviderRowsVisibility()
         resizeToFitContent()
+    }
+
+    /// Provider fallback notulen bisa BEDA dari provider utama (mis. utama "agy", fallback
+    /// "claude") - field model provider itu (Mode/Model Claude, Model OpenAI, Model Antigravity)
+    /// harus tetap kelihatan & bisa diedit kalau provider itu dipakai di SALAH SATU peran
+    /// (utama ATAU fallback), bukan cuma kalau jadi provider utama.
+    @objc func summaryFallbackChanged() {
+        updateNotulenProviderRowsVisibility()
+        resizeToFitContent()
+    }
+
+    private func updateNotulenProviderRowsVisibility() {
+        let primary = providerPopup.titleOfSelectedItem ?? "claude"
+        let fallback = summaryFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
+        claudeRows.forEach { $0.isHidden = !(primary == "claude" || fallback == "claude") }
+        openaiRows.forEach { $0.isHidden = !(primary == "openai" || fallback == "openai") }
+        agyRows.forEach { $0.isHidden = !(primary == "agy" || fallback == "agy") }
     }
 
     @objc func transcribeProviderChanged() {

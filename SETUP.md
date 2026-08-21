@@ -202,6 +202,8 @@ SUMMARY_FALLBACK_PROVIDER=claude
 
 Kosongkan `SUMMARY_FALLBACK_PROVIDER` untuk nonaktifkan (default). Kalau primary DAN fallback sama-sama gagal, error dari keduanya digabung di pesan errornya supaya jelas penyebabnya.
 
+Field Mode/Model provider (Claude, OpenAI, Antigravity) di menu tray Pengaturan otomatis muncul kalau provider itu dipakai di **salah satu peran** - baik sebagai provider utama MAUPUN sebagai fallback. Contoh: kalau `SUMMARY_PROVIDER=agy` dan `SUMMARY_FALLBACK_PROVIDER=claude`, field Mode Claude/Model Claude tetap kelihatan & bisa diisi walau Claude bukan provider utama - supaya kamu bisa pastikan model yang dipakai saat fallback benar-benar aktif, bukan cuma default kosong.
+
 ## 5. Akurasi Transkripsi: Local (Whisper) vs Cloud (Gemini/OpenAI)
 
 Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Pengaturan** atau langsung di `.env`. Ada 3 pilihan - semua sudah diverifikasi lewat tes nyata di audio yang sama (podcast padat istilah Arab/Islami, lihat tabel di bawah):
