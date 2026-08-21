@@ -191,9 +191,45 @@ MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription
 
 > Catatan teknis: `agy` menerima prompt lewat **argumen command**, bukan stdin (beda dari Claude CLI) — MeetResult sudah menangani ini otomatis, cuma relevan kalau kamu ingin tahu cara kerjanya.
 
-## 5. Akurasi Transkripsi & Alternatif Gemini
+## 5. Akurasi Transkripsi: Local (Whisper) vs Cloud (Gemini/OpenAI)
 
-### Bantu Whisper mengenali istilah/nama khusus
+Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Pengaturan** atau langsung di `.env`. Ada 3 pilihan - semua sudah diverifikasi lewat tes nyata di audio yang sama (podcast padat istilah Arab/Islami, lihat tabel di bawah):
+
+| Provider | `TRANSCRIBE_PROVIDER` | Lokasi proses | Butuh internet | Akurasi istilah khusus (hasil tes nyata) |
+|---|---|---|---|---|
+| **Whisper** (default) | `whisper` | Lokal (mesin sendiri) | Tidak | Baik untuk kalimat umum; model `large-v3` (default) memperbaiki sebagian kesalahan istilah khusus dibanding `medium`, tidak semua |
+| **Gemini** | `gemini` | Cloud (Google) | Ya | **Terbaik** - benar 100% untuk semua istilah uji (nama tokoh, istilah Arab) |
+| **OpenAI** | `openai` | Cloud (OpenAI) | Ya | Lebih baik dari Whisper `medium`, tapi masih ada kesalahan di istilah yang sangat spesifik |
+
+**Kapan pakai Cloud (Gemini/OpenAI)**: kalau tidak mau install Whisper secara lokal, mesin lambat/RAM terbatas, atau butuh akurasi maksimal untuk konten dengan istilah/nama khusus (asing, Arab, dsb). **Trade-off**: butuh koneksi internet, dan audio meeting terkirim ke server pihak ketiga (Google/OpenAI) - beda dari Whisper yang 100% lokal.
+
+### Setup Gemini (opsional)
+
+1. Dapatkan API key di https://aistudio.google.com/apikey
+2. Cek nama model **audio-capable** terbaru di Google AI Studio (nama model Gemini berubah dari waktu ke waktu, jadi sengaja tidak ada default bawaan di MeetResult)
+3. Isi lewat menu tray **Pengaturan**, atau langsung di `.env`:
+   ```
+   TRANSCRIBE_PROVIDER=gemini
+   GEMINI_API_KEY=...
+   GEMINI_MODEL=...
+   ```
+
+### Setup OpenAI (opsional)
+
+1. Dapatkan API key di https://platform.openai.com/api-keys
+2. Isi lewat menu tray **Pengaturan**, atau langsung di `.env`:
+   ```
+   TRANSCRIBE_PROVIDER=openai
+   OPENAI_TRANSCRIBE_API_KEY=...
+   OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe
+   ```
+   > `OPENAI_TRANSCRIBE_API_KEY`/`OPENAI_TRANSCRIBE_BASE_URL` SENGAJA terpisah dari `OPENAI_API_KEY`/`OPENAI_BASE_URL` yang dipakai untuk notulen (`SUMMARY_PROVIDER=openai`) - base URL notulen sering diarahkan ke server LOKAL (oMLX/Ollama) yang tidak punya endpoint audio.
+
+Setelah diisi, jalankan `meetresult transcribe <file.wav>` untuk tes, atau tombol **Test** di Pengaturan.
+
+> Provider transkripsi ini terpisah dari provider notulen (`SUMMARY_PROVIDER`) - kamu bisa campur, misalnya transkripsi pakai Gemini tapi notulen tetap pakai Claude, atau sebaliknya.
+
+### Bantu Whisper mengenali istilah/nama khusus (kalau tetap pakai lokal)
 
 Whisper cukup akurat untuk kalimat umum, tapi **sering salah untuk nama tokoh dan istilah asing/Arab** yang jarang muncul di data latihnya (mis. nama ulama, judul kitab) - kadang sampai mengganti dengan kata yang bunyinya mirip tapi maknanya jauh berbeda. Kalau konten kamu banyak istilah spesifik seperti ini, isi `.env`:
 
@@ -201,25 +237,16 @@ Whisper cukup akurat untuk kalimat umum, tapi **sering salah untuk nama tokoh da
 WHISPER_HOTWORDS=Taqiyuddin an-Nabhani, Al-Khaliq, khilafah, kaffah, Rib'i bin Amir
 ```
 
-Ini membantu **signifikan** (terverifikasi: 4 dari 7 istilah bermasalah langsung terkoreksi di sebuah tes nyata), tapi **tidak menjamin 100% benar** - istilah yang bunyinya sangat mirip kata umum lain (mis. nama Allah "Al-Khaliq" vs kata "alkoholik") kadang tetap salah walau sudah dikasih hint. Kalau butuh akurasi lebih tinggi untuk konten seperti ini, pertimbangkan `TRANSCRIBE_PROVIDER=gemini` di bawah - pada pengujian yang sama, Gemini konsisten benar untuk semua istilah tersebut.
+Ini membantu **signifikan** (terverifikasi: 4 dari 7 istilah bermasalah langsung terkoreksi di sebuah tes nyata), tapi **tidak menjamin 100% benar** - istilah yang bunyinya sangat mirip kata umum lain (mis. nama Allah "Al-Khaliq" vs kata "alkoholik") kadang tetap salah walau sudah dikasih hint. Untuk akurasi maksimal di konten seperti ini, `TRANSCRIBE_PROVIDER=gemini` di atas terbukti paling konsisten benar.
 
-### Transkripsi via Gemini (opsional)
+### Model Whisper belum terunduh?
 
-Default transkripsi (audio→teks) tetap **Whisper** (lokal, offline, gratis) - lihat [Prasyarat](#1-prasyarat). Sebagai alternatif, kamu bisa pakai **Gemini API** untuk transkripsi: Gemini bisa menerima file audio secara langsung (native audio understanding), beda dari Claude yang cuma menerima teks/gambar.
+Model `WHISPER_MODEL` (mis. `large-v3`) diunduh **otomatis** dari Hugging Face saat pertama kali dipakai untuk transkripsi - tidak perlu langkah manual. Kalau ingin mengunduh lebih dulu (supaya rekaman pertama tidak menunggu unduhan), menu tray **Pengaturan** menampilkan status model (sudah/belum terunduh) dengan tombol **Unduh** untuk memicu unduhan sekarang, atau lewat terminal:
 
-**Kapan pakai ini**: kalau tidak mau install Whisper secara lokal, atau ingin coba akurasi Gemini untuk audio yang sulit. **Trade-off**: butuh koneksi internet, dan audio meeting kamu terkirim ke server Google (bandingkan dengan Whisper yang 100% lokal).
-
-1. Dapatkan API key di https://aistudio.google.com/apikey
-2. Cek nama model **audio-capable** terbaru di Google AI Studio (nama model Gemini berubah dari waktu ke waktu, jadi sengaja tidak ada default bawaan di MeetResult)
-3. Isi `.env`:
-   ```
-   TRANSCRIBE_PROVIDER=gemini
-   GEMINI_API_KEY=...
-   GEMINI_MODEL=...
-   ```
-4. Jalankan `meetresult transcribe <file.wav>` untuk tes
-
-> Ini terpisah dari provider notulen (`SUMMARY_PROVIDER`) - kamu bisa campur, misalnya transkripsi pakai Gemini tapi notulen tetap pakai Claude, atau sebaliknya.
+```bash
+meetresult whisper-status --model large-v3   # cek status
+meetresult whisper-download --model large-v3 # unduh sekarang
+```
 
 ## 6. Setup Kalender
 

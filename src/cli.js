@@ -266,6 +266,34 @@ program
   });
 
 program
+  .command("whisper-status")
+  .description("Cek apakah model Whisper tertentu sudah terunduh di cache lokal (dipakai Pengaturan menu tray)")
+  .option("--model <model>", "Nama model (default: WHISPER_MODEL di .env)")
+  .action((opts) => {
+    const { checkWhisperModelCached } = require("./transcribe/whisperModelTool");
+    const model = opts.model || config.whisper.model;
+    const result = checkWhisperModelCached(model);
+    console.log(JSON.stringify({ model, ...result }));
+  });
+
+program
+  .command("whisper-download")
+  .description("Unduh model Whisper ke cache lokal (dipakai Pengaturan menu tray)")
+  .option("--model <model>", "Nama model (default: WHISPER_MODEL di .env)")
+  .action(async (opts) => {
+    const { downloadWhisperModel } = require("./transcribe/whisperModelTool");
+    const model = opts.model || config.whisper.model;
+    logger.info(`Mengunduh model Whisper '${model}'...`);
+    try {
+      await downloadWhisperModel(model, (chunk) => process.stdout.write(chunk));
+      logger.success(`Model '${model}' berhasil diunduh.`);
+    } catch (err) {
+      logger.error(`Gagal mengunduh model: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command("test-ai")
   .description(
     "Tes cepat provider/model AI notulen yang aktif - kirim transkrip kecil, cek responsnya valid & benar-benar mengikuti isi transkrip (tanpa bikin file/rekaman)"

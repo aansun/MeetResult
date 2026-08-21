@@ -5,6 +5,7 @@ const config = require("../config/config");
 const logger = require("../utils/logger");
 const { monthSubdir } = require("../utils/filename");
 const { transcribeWithGemini } = require("./geminiTranscriber");
+const { transcribeWithOpenAi } = require("./openaiTranscriber");
 
 /**
  * Menjalankan Whisper untuk mentranskrip file audio hasil rekaman menjadi teks Bahasa Indonesia.
@@ -90,23 +91,24 @@ function transcribeWithWhisper(audioFilePath, outDir) {
 }
 
 /**
- * Transkrip pakai Gemini API (lihat geminiTranscriber.js) - hasil teksnya ditulis manual
- * ke file, mengikuti konvensi nama & folder bulanan yang sama seperti jalur Whisper, supaya
- * langkah berikutnya (summarizer) tidak perlu tahu provider transkripsi mana yang dipakai.
+ * Transkrip pakai provider cloud (Gemini/OpenAI) - hasil teksnya ditulis manual ke file,
+ * mengikuti konvensi nama & folder bulanan yang sama seperti jalur Whisper, supaya langkah
+ * berikutnya (summarizer) tidak perlu tahu provider transkripsi mana yang dipakai.
  */
-async function transcribeWithGeminiToFile(audioFilePath, outDir) {
+async function transcribeWithCloudToFile(audioFilePath, outDir, transcribeFn) {
   const base = path.basename(audioFilePath, path.extname(audioFilePath));
   const transcriptFile = path.join(outDir, `${base}.txt`);
 
-  const text = await transcribeWithGemini(audioFilePath);
+  const text = await transcribeFn(audioFilePath);
   fs.writeFileSync(transcriptFile, text, "utf-8");
   logger.success(`Transkrip selesai: ${transcriptFile}`);
   return transcriptFile;
 }
 
 /**
- * Transkrip file audio jadi teks - dispatch ke Whisper (default, lokal/offline) atau Gemini
- * (TRANSCRIBE_PROVIDER=gemini, butuh internet & GEMINI_API_KEY, tapi bisa native paham audio).
+ * Transkrip file audio jadi teks - dispatch ke Whisper (default, lokal/offline), Gemini
+ * (TRANSCRIBE_PROVIDER=gemini, cloud, butuh GEMINI_API_KEY), atau OpenAI (TRANSCRIBE_PROVIDER=
+ * openai, cloud, butuh OPENAI_API_KEY, endpoint Audio Transcriptions).
  */
 async function transcribeAudio(audioFilePath) {
   if (!fs.existsSync(audioFilePath)) {
@@ -118,7 +120,10 @@ async function transcribeAudio(audioFilePath) {
   const outDir = monthSubdir(config.TRANSCRIPTS_DIR, fs.statSync(audioFilePath).mtime);
 
   if (config.transcribe.provider === "gemini") {
-    return transcribeWithGeminiToFile(audioFilePath, outDir);
+    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithGemini);
+  }
+  if (config.transcribe.provider === "openai") {
+    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithOpenAi);
   }
   return transcribeWithWhisper(audioFilePath, outDir);
 }

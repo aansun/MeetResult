@@ -78,6 +78,16 @@ module.exports = {
     // Kosongkan jika server lokal tidak butuh autentikasi (umum untuk Ollama/MLX/LM Studio)
     apiKey: process.env.OPENAI_API_KEY || "",
     model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    // --- Audio Transcriptions (khusus TRANSCRIBE_PROVIDER=openai) - SENGAJA dipisah dari
+    // baseURL/apiKey di atas: baseURL notulen sering diarahkan ke server LOKAL (oMLX/Ollama/
+    // LM Studio) yang umumnya TIDAK punya endpoint audio, sedangkan transkripsi audio hampir
+    // selalu butuh OpenAI cloud asli. transcribeApiKey jatuh balik ke OPENAI_API_KEY kalau
+    // OPENAI_TRANSCRIBE_API_KEY kosong (praktis kalau memang cuma pakai 1 key OpenAI asli).
+    transcribeBaseURL: process.env.OPENAI_TRANSCRIBE_BASE_URL || "https://api.openai.com/v1",
+    transcribeApiKey: process.env.OPENAI_TRANSCRIBE_API_KEY || process.env.OPENAI_API_KEY || "",
+    // "gpt-4o-transcribe" (default): penerus whisper-1 versi OpenAI, akurasi lebih baik.
+    // Alternatif: "whisper-1" (lebih lama/murah) atau "gpt-4o-mini-transcribe" (lebih cepat/murah).
+    transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-transcribe",
   },
 
   // --- Gemini API native (khusus TRANSCRIBE_PROVIDER=gemini) ---
@@ -91,8 +101,9 @@ module.exports = {
   },
 
   transcribe: {
-    // "whisper" (default, lokal/offline/gratis) atau "gemini" (butuh internet + GEMINI_API_KEY,
-    // audio terkirim ke server Google, tapi tidak perlu install apapun secara lokal)
+    // "whisper" (default, lokal/offline/gratis, lihat `whisper.*`), "gemini" (cloud, butuh
+    // GEMINI_API_KEY, lihat `gemini.*`), atau "openai" (cloud, butuh OPENAI_API_KEY, lihat
+    // `openai.*` - endpoint Audio Transcriptions, model default whisper-1)
     provider: (process.env.TRANSCRIBE_PROVIDER || "whisper").toLowerCase(),
   },
 
