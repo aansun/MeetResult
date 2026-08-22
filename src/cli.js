@@ -29,6 +29,8 @@ function applyModelOverride(model) {
     config.openai.model = model;
   } else if (config.ai.provider === "agy") {
     config.agy.model = model;
+  } else if (config.ai.provider === "opencode") {
+    config.opencode.model = model;
   } else if (config.claude.mode === "api") {
     config.claude.model = model;
   } else {
@@ -245,6 +247,27 @@ program
       return;
     }
 
+    if (config.ai.provider === "opencode") {
+      const { execFileSync } = require("child_process");
+      try {
+        const output = execFileSync(config.opencode.cliBin, ["models"], { encoding: "utf-8" });
+        output
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach((id) => {
+            const active = config.opencode.model ? id === config.opencode.model : false;
+            console.log(`  ${active ? chalk.green("● " + id + "  (aktif)") : "  " + id}`);
+          });
+        if (!config.opencode.model) {
+          logger.info("OPENCODE_MODEL kosong - opencode pakai model default.");
+        }
+      } catch (err) {
+        logger.error(`Gagal ambil daftar model dari '${config.opencode.cliBin}': ${err.message}`);
+      }
+      return;
+    }
+
     logger.info("Claude tidak punya endpoint daftar model publik - gunakan salah satu ID berikut:");
     ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"].forEach((id) => {
       const active =
@@ -310,6 +333,8 @@ program
           })`
         : config.ai.provider === "agy"
         ? `agy (model: ${config.agy.model || "default"})`
+        : config.ai.provider === "opencode"
+        ? `opencode (model: ${config.opencode.model || "default"})`
         : `claude/${config.claude.mode} (model: ${
             config.claude.mode === "api" ? config.claude.model : config.claude.cliModel || "default"
           })`;

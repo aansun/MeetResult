@@ -9,6 +9,7 @@ const { buildUniqueFileName, monthSubdir } = require("../utils/filename");
 const { askClaudeCli } = require("./claudeCliClient");
 const { askOpenAi } = require("./openaiClient");
 const { askAgyCli } = require("./agyCliClient");
+const { askOpencodeCli } = require("./opencodeCliClient");
 
 const structuredSchema = require("./schemas/structuredSchema");
 const meetingMinutesSchema = require("./schemas/meetingMinutesSchema");
@@ -96,6 +97,9 @@ async function callProvider(providerName, systemPrompt, userPrompt) {
   }
   if (providerName === "agy") {
     return askAgyCli(`${systemPrompt}\n\n${userPrompt}`);
+  }
+  if (providerName === "opencode") {
+    return askOpencodeCli(`${systemPrompt}\n\n${userPrompt}`);
   }
   // "claude" (default)
   if (config.claude.mode === "api") {

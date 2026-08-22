@@ -191,6 +191,29 @@ MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription
 
 > Catatan teknis: `agy` menerima prompt lewat **argumen command**, bukan stdin (beda dari Claude CLI) — MeetResult sudah menangani ini otomatis, cuma relevan kalau kamu ingin tahu cara kerjanya.
 
+### Opsi E — `opencode` (OpenCode CLI, akses banyak model - NOTULEN SAJA)
+
+[OpenCode](https://opencode.ai) adalah CLI agent coding yang bisa akses banyak model (Claude, GPT, Gemini, dll) lewat layanan OpenCode Zen/Go — MeetResult shell-out ke binary `opencode` yang sudah kamu install & login sendiri.
+
+1. Install & login OpenCode CLI sesuai panduan resminya, pastikan `opencode` ada di PATH:
+   ```bash
+   opencode --version
+   opencode providers login
+   ```
+2. Cek daftar model yang tersedia:
+   ```bash
+   opencode models
+   ```
+3. Di `.env`:
+   ```
+   SUMMARY_PROVIDER=opencode
+   OPENCODE_CLI_BIN=opencode
+   OPENCODE_MODEL=opencode/gemini-3.7-flash
+   ```
+   Format `OPENCODE_MODEL` WAJIB `provider/model` (mis. `opencode/gemini-3.7-flash` atau `opencode-go/kimi-k3`). Kosongkan untuk pakai default OpenCode.
+
+> **PENTING - kenapa OpenCode TIDAK dipakai untuk transkripsi audio**: OpenCode adalah agent coding dengan akses shell, bukan API teks/audio biasa. Diuji langsung: attachment file audio (`-f audio.wav`) gagal dengan error "Cannot read binary file" - dan begitu gagal, model mencoba menjalankan perintah shell sendiri di mesin (mis. `which whisper`, `ffprobe`) untuk mencari cara lain menyelesaikan tugas. Ini aman untuk prompt teks biasa (notulen), tapi TIDAK aman untuk pipeline otomatis yang memproses audio tanpa pengawasan - karena itu OpenCode cuma tersedia sebagai provider **notulen**, tidak muncul di pilihan provider transkripsi.
+
 ### Provider Backup (Fallback) untuk Notulen
 
 Kalau provider utama gagal (error teknis, kuota habis, dll), MeetResult bisa otomatis mencoba ulang lewat provider backup, supaya notulen tetap berhasil dibuat. Atur lewat menu tray **Pengaturan** ("Provider Fallback") atau `.env`:

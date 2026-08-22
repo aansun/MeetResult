@@ -47,6 +47,8 @@ module.exports = {
     // "agy": pakai Antigravity CLI (Google, akses model Gemini) yang sudah login di mesin
     //   ini, lihat konfigurasi `agy.*` di bawah - sama seperti CLAUDE_MODE=cli, ini shell-out
     //   ke binary resmi yang sudah user install & login sendiri, bukan reverse-engineer OAuth.
+    // "opencode": pakai OpenCode CLI (akses banyak model - Claude/GPT/Gemini/dll lewat OpenCode
+    //   Zen/Go) yang sudah login di mesin ini, lihat `opencode.*` di bawah.
     provider: (process.env.SUMMARY_PROVIDER || "claude").toLowerCase(),
     // Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - kosongkan
     // untuk nonaktifkan fallback. Kalau diisi (mis. "claude") dan berbeda dari provider utama,
@@ -70,6 +72,15 @@ module.exports = {
     // Kosongkan untuk pakai model default sesi agy yang sedang login. Cek pilihan model
     // dengan `agy models` di terminal.
     model: process.env.AGY_MODEL || "",
+  },
+
+  // --- OpenCode CLI (khusus SUMMARY_PROVIDER=opencode, notulen SAJA - lihat opencodeCliClient.js
+  // kenapa TIDAK dipakai untuk transkripsi) ---
+  opencode: {
+    cliBin: process.env.OPENCODE_CLI_BIN || "opencode",
+    // Format WAJIB "provider/model", mis. "opencode/gemini-3.7-flash" atau "opencode-go/kimi-k3"
+    // - cek pilihan dengan `opencode models` di terminal. Kosongkan untuk pakai default opencode.
+    model: process.env.OPENCODE_MODEL || "",
   },
 
   openai: {

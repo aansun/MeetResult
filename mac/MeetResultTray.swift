@@ -35,7 +35,7 @@ let cliScript = "bin/meetresult.js"
 /// `docx` menyentuh globalThis.localStorage saat di-load - tidak relevan sama sekali dengan
 /// MeetResult, cuma bikin log/output subprocess berisik.
 func subprocessEnvironment(
-    extraPaths: String = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin"
+    extraPaths: String = "/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/Library/Python/3.9/bin:\(NSHomeDirectory())/.opencode/bin"
 ) -> [String: String] {
     var env = ProcessInfo.processInfo.environment
     env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -774,6 +774,8 @@ class SettingsWindowController: NSWindowController {
     let refreshModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let agyModelField = NSComboBox()
     let refreshAgyModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
+    let opencodeModelField = NSComboBox()
+    let refreshOpencodeModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let testButton = NSButton(title: "Test", target: nil, action: nil)
 
     // --- Transkripsi (Local Whisper / Cloud Gemini / Cloud OpenAI) ---
@@ -795,6 +797,7 @@ class SettingsWindowController: NSWindowController {
     var claudeRows: [NSStackView] = []
     var openaiRows: [NSStackView] = []
     var agyRows: [NSStackView] = []
+    var opencodeRows: [NSStackView] = []
     var whisperRows: [NSStackView] = []
     var whisperFallbackRows: [NSStackView] = []
     var geminiRows: [NSStackView] = []
@@ -854,14 +857,14 @@ class SettingsWindowController: NSWindowController {
 
     func buildUI() {
         templatePopup.addItems(withTitles: ["structured", "meeting_minutes"])
-        providerPopup.addItems(withTitles: ["claude", "openai", "agy"])
+        providerPopup.addItems(withTitles: ["claude", "openai", "agy", "opencode"])
         claudeModePopup.addItems(withTitles: ["cli", "api"])
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
         claudeModePopup.target = self
         claudeModePopup.action = #selector(claudeModeChanged)
 
-        summaryFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "claude", "openai", "agy"])
+        summaryFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "claude", "openai", "agy", "opencode"])
         summaryFallbackPopup.toolTip = "Provider backup kalau provider utama gagal (error teknis, kuota habis, dll)"
         summaryFallbackPopup.target = self
         summaryFallbackPopup.action = #selector(summaryFallbackChanged)
@@ -892,6 +895,13 @@ class SettingsWindowController: NSWindowController {
         agyModelField.placeholderString = "kosongkan untuk default sesi agy"
         let agyModelRow = row("Model (Antigravity):", agyModelField, trailing: refreshAgyModelsButton)
         agyRows = [agyModelRow]
+
+        refreshOpencodeModelsButton.target = self
+        refreshOpencodeModelsButton.action = #selector(refreshOpencodeModels)
+        refreshOpencodeModelsButton.toolTip = "Ambil daftar model dari `opencode models`"
+        opencodeModelField.placeholderString = "format provider/model, mis. opencode/gemini-3.7-flash"
+        let opencodeModelRow = row("Model (OpenCode):", opencodeModelField, trailing: refreshOpencodeModelsButton)
+        opencodeRows = [opencodeModelRow]
 
         // --- Transkripsi: Local (Whisper) / Cloud (Gemini) / Cloud (OpenAI) ---
         transcribeProviderPopup.addItems(withTitles: ["whisper", "gemini", "openai"])
@@ -969,6 +979,7 @@ class SettingsWindowController: NSWindowController {
             claudeRows[0], claudeRows[1], claudeRows[2],
             openaiBaseRow, openaiKeyRow, openaiModelRow,
             agyRows[0],
+            opencodeRows[0],
             separator(),
             sectionLabel("Transkripsi (Audio \u{2192} Teks)"),
             row("Provider Transkripsi:", transcribeProviderPopup),
@@ -1030,6 +1041,7 @@ class SettingsWindowController: NSWindowController {
         claudeRows.forEach { $0.isHidden = !(primary == "claude" || fallback == "claude") }
         openaiRows.forEach { $0.isHidden = !(primary == "openai" || fallback == "openai") }
         agyRows.forEach { $0.isHidden = !(primary == "agy" || fallback == "agy") }
+        opencodeRows.forEach { $0.isHidden = !(primary == "opencode" || fallback == "opencode") }
     }
 
     @objc func transcribeProviderChanged() {
@@ -1261,6 +1273,65 @@ class SettingsWindowController: NSWindowController {
         }
     }
 
+    /// Ambil daftar model dari `opencode models` (shell-out, mirip refreshAgyModels()) dan
+    /// isi dropdown Model (OpenCode).
+    @objc func refreshOpencodeModels() {
+        refreshOpencodeModelsButton.isEnabled = false
+        refreshOpencodeModelsButton.title = "\u{22EF}"
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        task.arguments = [config_opencodeCliBin(), "models"]
+        task.environment = subprocessEnvironment()
+
+        let stdoutPipe = Pipe()
+        task.standardOutput = stdoutPipe
+        task.standardError = Pipe()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try task.run()
+            } catch {
+                DispatchQueue.main.async {
+                    self?.refreshOpencodeModelsButton.isEnabled = true
+                    self?.refreshOpencodeModelsButton.title = "\u{21BB}"
+                    self?.appDelegate?.showAlert(title: "Gagal ambil daftar model", message: error.localizedDescription)
+                }
+                return
+            }
+            task.waitUntilExit()
+            let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            let ids = output
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshOpencodeModelsButton.isEnabled = true
+                self.refreshOpencodeModelsButton.title = "\u{21BB}"
+                if ids.isEmpty {
+                    self.appDelegate?.showAlert(
+                        title: "Tidak ada model",
+                        message: "Gagal membaca daftar model dari 'opencode models'. Pastikan opencode terinstall & sudah login ('opencode providers login')."
+                    )
+                    return
+                }
+                let current = self.opencodeModelField.stringValue
+                self.opencodeModelField.removeAllItems()
+                self.opencodeModelField.addItems(withObjectValues: ids)
+                self.opencodeModelField.stringValue = current
+            }
+        }
+    }
+
+    private func config_opencodeCliBin() -> String {
+        let content = readEnvFile()
+        let bin = readEnvValue(content, "OPENCODE_CLI_BIN")
+        return bin.isEmpty ? "opencode" : bin
+    }
+
     private func config_agyCliBin() -> String {
         let content = readEnvFile()
         let bin = readEnvValue(content, "AGY_CLI_BIN")
@@ -1361,6 +1432,9 @@ class SettingsWindowController: NSWindowController {
         agyModelField.removeAllItems()
         agyModelField.stringValue = readEnvValue(content, "AGY_MODEL")
 
+        opencodeModelField.removeAllItems()
+        opencodeModelField.stringValue = readEnvValue(content, "OPENCODE_MODEL")
+
         providerChanged()
 
         let transcribeProvider = readEnvValue(content, "TRANSCRIBE_PROVIDER")
@@ -1399,6 +1473,7 @@ class SettingsWindowController: NSWindowController {
         content = setEnvValue(content, "OPENAI_API_KEY", openaiApiKeyField.stringValue)
         content = setEnvValue(content, "OPENAI_MODEL", openaiModelField.stringValue)
         content = setEnvValue(content, "AGY_MODEL", agyModelField.stringValue)
+        content = setEnvValue(content, "OPENCODE_MODEL", opencodeModelField.stringValue)
         content = setEnvValue(content, "TRANSCRIBE_PROVIDER", transcribeProviderPopup.titleOfSelectedItem ?? "whisper")
         let transcribeFallbackValue = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
         content = setEnvValue(content, "TRANSCRIBE_FALLBACK_PROVIDER", transcribeFallbackValue == fallbackDisabledLabel ? "" : transcribeFallbackValue)
