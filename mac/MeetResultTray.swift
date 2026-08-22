@@ -94,6 +94,12 @@ let knownOpenAiTranscribeModels = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"
 // ("") di .env, bukan disimpan sebagai teks ini sendiri.
 let fallbackDisabledLabel = "(Nonaktif)"
 
+// Ukuran window Pengaturan: sidebar navigasi (kiri) + panel detail (kanan).
+// detailContentWidth = lebar 1 baris field (label 130 + spacing 8 + control 220) + padding kiri/kanan.
+let sidebarWidth: CGFloat = 180
+let detailRowWidth: CGFloat = 358
+let detailContentWidth: CGFloat = detailRowWidth
+
 /// Baca versi aplikasi dari package.json - dipakai di footer "Tentang" window Pengaturan
 /// supaya tidak perlu diupdate manual tiap kali versi berubah.
 func readAppVersion() -> String {
@@ -757,7 +763,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Window Pengaturan (edit .env langsung, UI minimalis)
 
-class SettingsWindowController: NSWindowController, NSTabViewDelegate {
+class SettingsWindowController: NSWindowController {
     weak var appDelegate: AppDelegate?
 
     let templatePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -778,7 +784,23 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
     let opencodeModelField = NSComboBox()
     let refreshOpencodeModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let testButton = NSButton(title: "Test", target: nil, action: nil)
-    let tabView = NSTabView()
+
+    // --- Navigasi sidebar (kiri) + panel detail (kanan), pola macOS System Settings ---
+    let sidebarTitles = ["Notulen", "Transkripsi", "Notulen AI"]
+    var sidebarButtons: [NSButton] = []
+    let detailContainer = NSView()
+    private var currentSectionIndex = 0
+
+    // Header nama provider di atas grup field-nya - WAJIB ada karena label field-nya generik
+    // ("API Key:"/"Model:"); kalau provider utama & fallback beda (mis. Gemini + OpenAI), dua
+    // grup tampil sekaligus dan tanpa header ini tidak ketahuan field mana milik provider mana.
+    let claudeHeader = NSTextField(labelWithString: "Claude")
+    let openaiHeader = NSTextField(labelWithString: "OpenAI")
+    let agyHeader = NSTextField(labelWithString: "Antigravity")
+    let opencodeHeader = NSTextField(labelWithString: "OpenCode")
+    let whisperHeader = NSTextField(labelWithString: "Whisper (lokal)")
+    let geminiHeader = NSTextField(labelWithString: "Gemini")
+    let openaiTranscribeHeader = NSTextField(labelWithString: "OpenAI")
 
     // --- Transkripsi (Local Whisper / Cloud Gemini / Cloud OpenAI) ---
     let transcribeProviderPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -811,6 +833,7 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
     var transkripsiStack: NSStackView!
     var notulenAiStack: NSStackView!
     var bottomStack: NSStackView!
+    var windowStack: NSStackView!
     private var envSnapshotBeforeTest: String?
     private var envMtimeBeforeTest: Date?
     private var whisperStatusCheckToken = 0
@@ -830,12 +853,19 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
         buildUI()
     }
 
-    private func separator() -> NSBox {
+    private func separator(width: CGFloat = detailContentWidth) -> NSBox {
         let box = NSBox()
         box.boxType = .separator
         box.translatesAutoresizingMaskIntoConstraints = false
-        box.widthAnchor.constraint(equalToConstant: 358).isActive = true
+        box.widthAnchor.constraint(equalToConstant: width).isActive = true
         return box
+    }
+
+    /// Judul kecil nama provider di atas grup field-nya (lihat komentar di properti header).
+    private func groupHeader(_ label: NSTextField) -> NSTextField {
+        label.font = NSFont.boldSystemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        return label
     }
 
     private func row(_ label: String, _ control: NSView, trailing: NSView? = nil) -> NSStackView {
@@ -863,29 +893,48 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
         return label
     }
 
-    /// Bungkus 1 NSStackView konten jadi 1 tab NSTabViewItem, dengan edge insets & lebar tetap
-    /// yang sama di semua tab supaya window tidak "meloncat" lebar saat pindah tab.
-    private func makeTabItem(_ title: String, content: NSStackView, width: CGFloat) -> NSTabViewItem {
-        content.orientation = .vertical
-        content.alignment = .leading
-        content.spacing = 10
-        content.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
-        content.translatesAutoresizingMaskIntoConstraints = false
+    private func makeSidebarButton(_ title: String, tag: Int) -> NSButton {
+        let button = NSButton(title: title, target: self, action: #selector(sidebarItemClicked(_:)))
+        button.tag = tag
+        button.bezelStyle = .recessed
+        button.setButtonType(.pushOnPushOff)
+        button.alignment = .left
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(equalToConstant: sidebarWidth - 24).isActive = true
+        return button
+    }
 
-        let container = NSView()
-        container.addSubview(content)
+    @objc func sidebarItemClicked(_ sender: NSButton) {
+        selectSection(sender.tag)
+    }
+
+    private func sectionStack(_ index: Int) -> NSStackView? {
+        switch index {
+        case 0: return notulenStack
+        case 1: return transkripsiStack
+        case 2: return notulenAiStack
+        default: return nil
+        }
+    }
+
+    /// Tampilkan 1 section di panel detail (kanan) & tandai item sidebar (kiri) yang aktif.
+    /// Section yang tidak aktif dilepas dari view hierarchy (bukan cuma disembunyikan) supaya
+    /// tinggi window benar-benar mengikuti section yang sedang tampil.
+    private func selectSection(_ index: Int) {
+        currentSectionIndex = index
+        for (i, button) in sidebarButtons.enumerated() {
+            button.state = (i == index) ? .on : .off
+        }
+        detailContainer.subviews.forEach { $0.removeFromSuperview() }
+        guard let stack = sectionStack(index) else { return }
+        detailContainer.addSubview(stack)
         NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: container.topAnchor),
-            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            content.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
-            container.widthAnchor.constraint(equalToConstant: width),
+            stack.topAnchor.constraint(equalTo: detailContainer.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor),
         ])
-
-        let item = NSTabViewItem(identifier: title)
-        item.label = title
-        item.view = container
-        return item
+        resizeToFitContent()
     }
 
     func buildUI() {
@@ -1007,58 +1056,87 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
         aboutLabel.font = NSFont.systemFont(ofSize: 11)
         aboutLabel.textColor = .secondaryLabelColor
 
-        // Lebar konten setiap tab (belum termasuk strip tab di kanan) - dihitung dari lebar
-        // baris terlebar (label 130 + control 220/188 + trailing 24 + spacing) + edge insets.
-        let tabContentWidth: CGFloat = 400
-
-        // --- Tab 1: Notulen (berlaku untuk semua skema template) ---
+        // --- Section 1: Notulen (berlaku untuk semua skema template) ---
         notulenStack = NSStackView(views: [
             row("Template:", templatePopup),
             row("Disusun oleh:", preparedByField),
             row("Nama Organisasi:", orgNameField),
         ])
 
-        // --- Tab 2: Transkripsi ---
+        // --- Section 2: Transkripsi ---
+        // Provider & Fallback dipilih di atas, lalu grup setting per provider muncul di bawah
+        // sesuai yang dipakai - jadi provider cloud/lokal sama-sama bisa jadi utama MAUPUN
+        // fallback, dengan setting-nya masing-masing.
         transkripsiStack = NSStackView(views: [
             row("Provider:", transcribeProviderPopup),
-            whisperRows[0], whisperRows[1],
-            geminiRows[0], geminiRows[1],
-            openaiTranscribeRows[0], openaiTranscribeRows[1],
-            separator(),
             row("Fallback Provider:", transcribeFallbackPopup),
+            separator(),
+            groupHeader(whisperHeader),
+            whisperRows[0], whisperRows[1],
             whisperFallbackRows[0], whisperFallbackRows[1],
+            groupHeader(geminiHeader),
+            geminiRows[0], geminiRows[1],
+            groupHeader(openaiTranscribeHeader),
+            openaiTranscribeRows[0], openaiTranscribeRows[1],
         ])
 
-        // --- Tab 3: Notulen AI ---
+        // --- Section 3: Notulen AI ---
         notulenAiStack = NSStackView(views: [
             row("Provider:", providerPopup),
-            claudeRows[0], claudeRows[1], claudeRows[2], claudeRows[3],
-            openaiBaseRow, openaiKeyRow, openaiModelRow,
-            agyRows[0],
-            opencodeRows[0],
-            separator(),
             row("Fallback Provider:", summaryFallbackPopup),
+            separator(),
+            groupHeader(claudeHeader),
+            claudeRows[0], claudeRows[1], claudeRows[2], claudeRows[3],
+            groupHeader(openaiHeader),
+            openaiBaseRow, openaiKeyRow, openaiModelRow,
+            groupHeader(agyHeader),
+            agyRows[0],
+            groupHeader(opencodeHeader),
+            opencodeRows[0],
         ])
 
-        // bottomStack HARUS dibuat SEBELUM tabView.addTabViewItem() - menambah tab item PERTAMA
-        // langsung memicu didSelect (lewat delegate) -> resizeToFitContent() -> butuh
-        // bottomStack.fittingSize; kalau belum ada, crash (force-unwrap nil).
-        bottomStack = NSStackView(views: [separator(), buttonRow, separator(), aboutLabel])
+        for stack in [notulenStack, transkripsiStack, notulenAiStack] {
+            stack!.orientation = .vertical
+            stack!.alignment = .leading
+            stack!.spacing = 10
+            stack!.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+            stack!.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        // --- Sidebar navigasi (kiri) ---
+        let sidebar = NSStackView()
+        sidebar.orientation = .vertical
+        sidebar.alignment = .leading
+        sidebar.spacing = 4
+        sidebar.edgeInsets = NSEdgeInsets(top: 16, left: 12, bottom: 16, right: 12)
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        for (index, title) in sidebarTitles.enumerated() {
+            let button = makeSidebarButton(title, tag: index)
+            sidebarButtons.append(button)
+            sidebar.addArrangedSubview(button)
+        }
+        sidebar.widthAnchor.constraint(equalToConstant: sidebarWidth).isActive = true
+
+        // --- Panel detail (kanan) - isinya di-swap oleh selectSection() ---
+        detailContainer.translatesAutoresizingMaskIntoConstraints = false
+        detailContainer.widthAnchor.constraint(equalToConstant: detailContentWidth + 32).isActive = true
+
+        let contentRow = NSStackView(views: [sidebar, detailContainer])
+        contentRow.orientation = .horizontal
+        contentRow.alignment = .top
+        contentRow.spacing = 0
+        contentRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let bottomWidth = sidebarWidth + detailContentWidth + 32 - 32
+        bottomStack = NSStackView(views: [separator(width: bottomWidth), buttonRow, separator(width: bottomWidth), aboutLabel])
         bottomStack.orientation = .vertical
         bottomStack.alignment = .leading
         bottomStack.spacing = 10
         bottomStack.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 16, right: 16)
         bottomStack.translatesAutoresizingMaskIntoConstraints = false
-        buttonRow.widthAnchor.constraint(equalToConstant: 358).isActive = true
+        buttonRow.widthAnchor.constraint(equalToConstant: bottomWidth).isActive = true
 
-        tabView.tabViewType = .rightTabsBezelBorder
-        tabView.delegate = self
-        tabView.translatesAutoresizingMaskIntoConstraints = false
-        tabView.addTabViewItem(makeTabItem("Notulen", content: notulenStack, width: tabContentWidth))
-        tabView.addTabViewItem(makeTabItem("Transkripsi", content: transkripsiStack, width: tabContentWidth))
-        tabView.addTabViewItem(makeTabItem("Notulen AI", content: notulenAiStack, width: tabContentWidth))
-
-        let windowStack = NSStackView(views: [tabView, bottomStack])
+        windowStack = NSStackView(views: [contentRow, bottomStack])
         windowStack.orientation = .vertical
         windowStack.alignment = .leading
         windowStack.spacing = 0
@@ -1073,35 +1151,17 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
             windowStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
         window?.contentView = contentView
-        resizeToFitContent()
+        selectSection(0)
     }
 
-    /// Hitung ulang & terapkan ukuran window pas dengan konten TAB YANG SEDANG DIPILIH -
-    /// wajib dipanggil ulang tiap kali baris disembunyikan/dimunculkan atau tab berganti,
+    /// Hitung ulang & terapkan ukuran window pas dengan konten SECTION YANG SEDANG TAMPIL -
+    /// wajib dipanggil ulang tiap kali baris disembunyikan/dimunculkan atau section berganti,
     /// karena NSStackView.fittingSize berubah begitu ada arranged subview yang isHidden-nya
-    /// berubah, tapi window TIDAK otomatis mengikuti. Lebar window tetap konstan (supaya
-    /// tidak "meloncat" pindah tab), cuma tinggi yang menyesuaikan tab aktif.
+    /// berubah, tapi window TIDAK otomatis mengikuti.
     private func resizeToFitContent() {
+        guard let windowStack = windowStack else { return }
         window?.layoutIfNeeded()
-        let activeStack = currentTabStack() ?? notulenStack!
-        // Chrome tetap (strip tab kanan + padding NSTabView) ditambahkan ke lebar konten tab.
-        let width = activeStack.fittingSize.width + 150
-        let height = activeStack.fittingSize.height + 30 + bottomStack.fittingSize.height
-        window?.setContentSize(NSSize(width: max(width, 520), height: height))
-    }
-
-    private func currentTabStack() -> NSStackView? {
-        guard let selected = tabView.selectedTabViewItem else { return notulenStack }
-        switch tabView.indexOfTabViewItem(selected) {
-        case 0: return notulenStack
-        case 1: return transkripsiStack
-        case 2: return notulenAiStack
-        default: return nil
-        }
-    }
-
-    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
-        resizeToFitContent()
+        window?.setContentSize(windowStack.fittingSize)
     }
 
     @objc func providerChanged() {
@@ -1121,17 +1181,26 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
     private func updateNotulenProviderRowsVisibility() {
         let primary = providerPopup.titleOfSelectedItem ?? "claude"
         let fallback = summaryFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
-        let claudeInRole = (primary == "claude" || fallback == "claude")
+        // Provider dipakai kalau jadi provider UTAMA ATAU FALLBACK - keduanya butuh setting
+        // (API key/model) yang sama, jadi 1 grup field dipakai bersama untuk kedua peran.
+        func inRole(_ name: String) -> Bool { primary == name || fallback == name }
+
+        let claudeInRole = inRole("claude")
         let isApi = claudeModePopup.titleOfSelectedItem == "api"
         // claudeRows[0]=Type, [1]=Model(cli), [2]=Model(api), [3]=API Key(api) - cuma 1
         // Model/API Key yang tampil di satu waktu, sesuai Type yang dipilih (lihat claudeModeChanged()).
+        claudeHeader.isHidden = !claudeInRole
         claudeRows[0].isHidden = !claudeInRole
         claudeRows[1].isHidden = !(claudeInRole && !isApi)
         claudeRows[2].isHidden = !(claudeInRole && isApi)
         claudeRows[3].isHidden = !(claudeInRole && isApi)
-        openaiRows.forEach { $0.isHidden = !(primary == "openai" || fallback == "openai") }
-        agyRows.forEach { $0.isHidden = !(primary == "agy" || fallback == "agy") }
-        opencodeRows.forEach { $0.isHidden = !(primary == "opencode" || fallback == "opencode") }
+
+        openaiHeader.isHidden = !inRole("openai")
+        openaiRows.forEach { $0.isHidden = !inRole("openai") }
+        agyHeader.isHidden = !inRole("agy")
+        agyRows.forEach { $0.isHidden = !inRole("agy") }
+        opencodeHeader.isHidden = !inRole("opencode")
+        opencodeRows.forEach { $0.isHidden = !inRole("opencode") }
     }
 
     @objc func transcribeProviderChanged() {
@@ -1161,10 +1230,19 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
     private func updateTranscribeRowsVisibility() {
         let primary = transcribeProviderPopup.titleOfSelectedItem ?? "whisper"
         let fallback = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
+        func inRole(_ name: String) -> Bool { primary == name || fallback == name }
+
+        // Whisper punya field Model TERPISAH untuk peran utama & fallback (WHISPER_MODEL vs
+        // WHISPER_FALLBACK_MODEL) - wajar dipakai dengan model beda di tiap peran (mis. utama
+        // large-v3 paling akurat, fallback medium yang lebih cepat).
+        whisperHeader.isHidden = !inRole("whisper")
         whisperRows.forEach { $0.isHidden = primary != "whisper" }
         whisperFallbackRows.forEach { $0.isHidden = fallback != "whisper" }
-        geminiRows.forEach { $0.isHidden = !(primary == "gemini" || fallback == "gemini") }
-        openaiTranscribeRows.forEach { $0.isHidden = !(primary == "openai" || fallback == "openai") }
+
+        geminiHeader.isHidden = !inRole("gemini")
+        geminiRows.forEach { $0.isHidden = !inRole("gemini") }
+        openaiTranscribeHeader.isHidden = !inRole("openai")
+        openaiTranscribeRows.forEach { $0.isHidden = !inRole("openai") }
     }
 
     @objc func whisperModelChanged() {
@@ -1716,6 +1794,7 @@ class SettingsWindowController: NSWindowController, NSTabViewDelegate {
     @objc func closeWindow() {
         window?.close()
     }
+
 }
 
 let app = NSApplication.shared

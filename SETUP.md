@@ -449,12 +449,14 @@ meetresult tray
 
 **Event List** — daftar meeting hari ini + status, klik yang sudah selesai untuk buka notulennya
 
-**Pengaturan...** — jendela native (bukan edit `.env` manual), lebih lebar dengan navigasi tab di sisi kanan, 3 tab:
+**Pengaturan...** — jendela native (bukan edit `.env` manual), dengan menu navigasi di sisi kiri dan detail pengaturan di kanan (pola macOS System Settings). Ada 3 menu:
 - **Notulen** — Template MoM, Disusun oleh, Nama Organisasi (berlaku untuk semua skema template)
-- **Transkripsi** — Provider (Whisper/Gemini/OpenAI) + API Key/Model-nya (kosong kalau lokal/Whisper), Fallback Provider + Model Fallback
-- **Notulen AI** — Provider (Claude/OpenAI/Antigravity/OpenCode) + Type/API Key/Model-nya, Fallback Provider
+- **Transkripsi** — Provider + Fallback Provider, lalu grup setting per provider yang dipakai: **Whisper (lokal)** (Model; tanpa API Key karena jalan lokal — plus Model Fallback terpisah kalau Whisper jadi fallback), **Gemini** (API Key + Model), **OpenAI** (API Key + Model)
+- **Notulen AI** — Provider + Fallback Provider, lalu grup setting per provider: **Claude** (Type cli/api, Model, API Key untuk mode api), **OpenAI** (Base URL, API Key, Model), **Antigravity** (Model), **OpenCode** (Model)
 
-Tombol **Test** (tersedia di semua tab) untuk verifikasi provider/model notulen yang sedang diisi sebelum disimpan.
+Grup setting muncul otomatis sesuai provider yang dipakai — baik sebagai provider **utama maupun fallback**. Jadi kombinasi bebas: provider cloud bisa jadi fallback dari lokal, atau sebaliknya, dan setting masing-masing tetap tersedia. Kalau utama & fallback beda provider, kedua grup tampil sekaligus dengan header nama providernya.
+
+Tombol **Test** untuk verifikasi provider/model notulen yang sedang diisi sebelum disimpan.
 
 **Lainnya:**
 - **Buka Notulen** — buka folder `data/summaries` di Finder
