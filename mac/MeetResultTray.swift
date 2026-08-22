@@ -757,7 +757,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Window Pengaturan (edit .env langsung, UI minimalis)
 
-class SettingsWindowController: NSWindowController {
+class SettingsWindowController: NSWindowController, NSTabViewDelegate {
     weak var appDelegate: AppDelegate?
 
     let templatePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -768,6 +768,7 @@ class SettingsWindowController: NSWindowController {
     let claudeModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let claudeCliModelField = NSComboBox()
     let claudeApiModelField = NSComboBox()
+    let claudeApiKeyField = NSSecureTextField(string: "")
     let openaiBaseURLField = NSTextField(string: "")
     let openaiApiKeyField = NSSecureTextField(string: "")
     let openaiModelField = NSComboBox()
@@ -777,6 +778,7 @@ class SettingsWindowController: NSWindowController {
     let opencodeModelField = NSComboBox()
     let refreshOpencodeModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let testButton = NSButton(title: "Test", target: nil, action: nil)
+    let tabView = NSTabView()
 
     // --- Transkripsi (Local Whisper / Cloud Gemini / Cloud OpenAI) ---
     let transcribeProviderPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -794,6 +796,9 @@ class SettingsWindowController: NSWindowController {
     let openaiTranscribeApiKeyField = NSSecureTextField(string: "")
     let openaiTranscribeModelField = NSComboBox()
 
+    // claudeRows = [modeRow, cliModelRow, apiModelRow, apiKeyRow] - visibilitas gabungan
+    // (Provider utama ATAU fallback == "claude"), lalu claudeModeChanged() menyembunyikan
+    // salah satu dari cliModelRow/apiModelRow supaya kelihatan seperti 1 slot "Model:" saja.
     var claudeRows: [NSStackView] = []
     var openaiRows: [NSStackView] = []
     var agyRows: [NSStackView] = []
@@ -802,7 +807,10 @@ class SettingsWindowController: NSWindowController {
     var whisperFallbackRows: [NSStackView] = []
     var geminiRows: [NSStackView] = []
     var openaiTranscribeRows: [NSStackView] = []
-    var mainStack: NSStackView!
+    var notulenStack: NSStackView!
+    var transkripsiStack: NSStackView!
+    var notulenAiStack: NSStackView!
+    var bottomStack: NSStackView!
     private var envSnapshotBeforeTest: String?
     private var envMtimeBeforeTest: Date?
     private var whisperStatusCheckToken = 0
@@ -855,6 +863,31 @@ class SettingsWindowController: NSWindowController {
         return label
     }
 
+    /// Bungkus 1 NSStackView konten jadi 1 tab NSTabViewItem, dengan edge insets & lebar tetap
+    /// yang sama di semua tab supaya window tidak "meloncat" lebar saat pindah tab.
+    private func makeTabItem(_ title: String, content: NSStackView, width: CGFloat) -> NSTabViewItem {
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 10
+        content.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: container.topAnchor),
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
+            container.widthAnchor.constraint(equalToConstant: width),
+        ])
+
+        let item = NSTabViewItem(identifier: title)
+        item.label = title
+        item.view = container
+        return item
+    }
+
     func buildUI() {
         templatePopup.addItems(withTitles: ["structured", "meeting_minutes"])
         providerPopup.addItems(withTitles: ["claude", "openai", "agy", "opencode"])
@@ -873,16 +906,21 @@ class SettingsWindowController: NSWindowController {
         claudeApiModelField.addItems(withObjectValues: knownClaudeModels)
         claudeCliModelField.placeholderString = "default Claude Code CLI"
         claudeApiModelField.placeholderString = "pilih atau ketik manual"
+        claudeApiKeyField.placeholderString = "console.anthropic.com/settings/keys"
 
         refreshModelsButton.target = self
         refreshModelsButton.action = #selector(refreshOpenAIModels)
         refreshModelsButton.toolTip = "Ambil daftar model dari server (Base URL)"
         openaiModelField.placeholderString = "pilih dari daftar atau ketik manual"
 
+        // claudeRows[0]=Type, [1]=Model(mode cli), [2]=Model(mode api), [3]=API Key(mode api) -
+        // [1]/[2] & [3] ditoggle oleh updateClaudeRowsVisibility() supaya kelihatan seperti
+        // 1 slot "Model:"/"API Key:" generik yang berubah sesuai Type, bukan 3 baris sekaligus.
         claudeRows = [
-            row("Mode Claude:", claudeModePopup),
-            row("Model (mode CLI):", claudeCliModelField),
-            row("Model (mode API):", claudeApiModelField),
+            row("Type:", claudeModePopup),
+            row("Model:", claudeCliModelField),
+            row("Model:", claudeApiModelField),
+            row("API Key:", claudeApiKeyField),
         ]
         let openaiBaseRow = row("Base URL:", openaiBaseURLField)
         let openaiKeyRow = row("API Key:", openaiApiKeyField)
@@ -893,14 +931,14 @@ class SettingsWindowController: NSWindowController {
         refreshAgyModelsButton.action = #selector(refreshAgyModels)
         refreshAgyModelsButton.toolTip = "Ambil daftar model dari `agy models`"
         agyModelField.placeholderString = "kosongkan untuk default sesi agy"
-        let agyModelRow = row("Model (Antigravity):", agyModelField, trailing: refreshAgyModelsButton)
+        let agyModelRow = row("Model:", agyModelField, trailing: refreshAgyModelsButton)
         agyRows = [agyModelRow]
 
         refreshOpencodeModelsButton.target = self
         refreshOpencodeModelsButton.action = #selector(refreshOpencodeModels)
         refreshOpencodeModelsButton.toolTip = "Ambil daftar model dari `opencode models`"
         opencodeModelField.placeholderString = "format provider/model, mis. opencode/gemini-3.7-flash"
-        let opencodeModelRow = row("Model (OpenCode):", opencodeModelField, trailing: refreshOpencodeModelsButton)
+        let opencodeModelRow = row("Model:", opencodeModelField, trailing: refreshOpencodeModelsButton)
         opencodeRows = [opencodeModelRow]
 
         // --- Transkripsi: Local (Whisper) / Cloud (Gemini) / Cloud (OpenAI) ---
@@ -920,13 +958,15 @@ class SettingsWindowController: NSWindowController {
         whisperActionButton.action = #selector(whisperActionButtonClicked)
         whisperStatusLabel.font = NSFont.systemFont(ofSize: 11)
         whisperStatusLabel.textColor = .secondaryLabelColor
-        let whisperModelRow = row("Model Whisper (lokal):", whisperModelField, trailing: whisperActionButton)
+        // Whisper jalan lokal - tidak butuh API Key sama sekali (baris "API Key" otomatis
+        // tidak muncul kalau provider transkripsi/fallback-nya whisper).
+        let whisperModelRow = row("Model:", whisperModelField, trailing: whisperActionButton)
         let whisperStatusRow = NSStackView(views: [NSView(), whisperStatusLabel])
         whisperStatusRow.orientation = .horizontal
         whisperRows = [whisperModelRow, whisperStatusRow]
 
         // Model Whisper khusus untuk peran FALLBACK - kosongkan untuk pakai model yang sama
-        // dengan "Model Whisper (lokal)" di atas (lihat WHISPER_FALLBACK_MODEL).
+        // dengan Model primary di atas (lihat WHISPER_FALLBACK_MODEL).
         whisperFallbackModelField.addItems(withObjectValues: knownWhisperModels)
         whisperFallbackModelField.placeholderString = "kosongkan untuk pakai model yang sama seperti di atas"
         whisperFallbackModelField.target = self
@@ -935,20 +975,20 @@ class SettingsWindowController: NSWindowController {
         whisperFallbackActionButton.action = #selector(whisperFallbackActionButtonClicked)
         whisperFallbackStatusLabel.font = NSFont.systemFont(ofSize: 11)
         whisperFallbackStatusLabel.textColor = .secondaryLabelColor
-        let whisperFallbackModelRow = row("Model Whisper (Fallback):", whisperFallbackModelField, trailing: whisperFallbackActionButton)
+        let whisperFallbackModelRow = row("Model Fallback:", whisperFallbackModelField, trailing: whisperFallbackActionButton)
         let whisperFallbackStatusRow = NSStackView(views: [NSView(), whisperFallbackStatusLabel])
         whisperFallbackStatusRow.orientation = .horizontal
         whisperFallbackRows = [whisperFallbackModelRow, whisperFallbackStatusRow]
 
         geminiModelField.placeholderString = "cek nama model audio-capable terbaru di Google AI Studio"
-        openaiTranscribeApiKeyField.placeholderString = "kosongkan untuk pakai API Key OpenAI notulen di atas"
-        let geminiKeyRow = row("Gemini API Key:", geminiApiKeyField)
-        let geminiModelRow = row("Gemini Model:", geminiModelField)
+        openaiTranscribeApiKeyField.placeholderString = "kosongkan untuk pakai API Key OpenAI notulen di tab lain"
+        let geminiKeyRow = row("API Key:", geminiApiKeyField)
+        let geminiModelRow = row("Model:", geminiModelField)
         geminiRows = [geminiKeyRow, geminiModelRow]
 
         openaiTranscribeModelField.addItems(withObjectValues: knownOpenAiTranscribeModels)
-        let openaiTranscribeKeyRow = row("OpenAI API Key:", openaiTranscribeApiKeyField)
-        let openaiTranscribeModelRow = row("OpenAI Model:", openaiTranscribeModelField)
+        let openaiTranscribeKeyRow = row("API Key:", openaiTranscribeApiKeyField)
+        let openaiTranscribeModelRow = row("Model:", openaiTranscribeModelField)
         openaiTranscribeRows = [openaiTranscribeKeyRow, openaiTranscribeModelRow]
 
         testButton.target = self
@@ -967,58 +1007,101 @@ class SettingsWindowController: NSWindowController {
         aboutLabel.font = NSFont.systemFont(ofSize: 11)
         aboutLabel.textColor = .secondaryLabelColor
 
-        mainStack = NSStackView(views: [
-            sectionLabel("Notulen (MoM)"),
-            row("Skema:", templatePopup),
+        // Lebar konten setiap tab (belum termasuk strip tab di kanan) - dihitung dari lebar
+        // baris terlebar (label 130 + control 220/188 + trailing 24 + spacing) + edge insets.
+        let tabContentWidth: CGFloat = 400
+
+        // --- Tab 1: Notulen (berlaku untuk semua skema template) ---
+        notulenStack = NSStackView(views: [
+            row("Template:", templatePopup),
             row("Disusun oleh:", preparedByField),
             row("Nama Organisasi:", orgNameField),
+        ])
+
+        // --- Tab 2: Transkripsi ---
+        transkripsiStack = NSStackView(views: [
+            row("Provider:", transcribeProviderPopup),
+            whisperRows[0], whisperRows[1],
+            geminiRows[0], geminiRows[1],
+            openaiTranscribeRows[0], openaiTranscribeRows[1],
             separator(),
-            sectionLabel("Provider AI (Notulen)"),
+            row("Fallback Provider:", transcribeFallbackPopup),
+            whisperFallbackRows[0], whisperFallbackRows[1],
+        ])
+
+        // --- Tab 3: Notulen AI ---
+        notulenAiStack = NSStackView(views: [
             row("Provider:", providerPopup),
-            row("Provider Fallback:", summaryFallbackPopup),
-            claudeRows[0], claudeRows[1], claudeRows[2],
+            claudeRows[0], claudeRows[1], claudeRows[2], claudeRows[3],
             openaiBaseRow, openaiKeyRow, openaiModelRow,
             agyRows[0],
             opencodeRows[0],
             separator(),
-            sectionLabel("Transkripsi (Audio \u{2192} Teks)"),
-            row("Provider Transkripsi:", transcribeProviderPopup),
-            row("Fallback Transkripsi:", transcribeFallbackPopup),
-            whisperRows[0], whisperRows[1],
-            whisperFallbackRows[0], whisperFallbackRows[1],
-            geminiRows[0], geminiRows[1],
-            openaiTranscribeRows[0], openaiTranscribeRows[1],
-            separator(),
-            buttonRow,
-            separator(),
-            aboutLabel,
+            row("Fallback Provider:", summaryFallbackPopup),
         ])
-        mainStack.orientation = .vertical
-        mainStack.alignment = .leading
-        mainStack.spacing = 10
-        mainStack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
-        mainStack.translatesAutoresizingMaskIntoConstraints = false
+
+        // bottomStack HARUS dibuat SEBELUM tabView.addTabViewItem() - menambah tab item PERTAMA
+        // langsung memicu didSelect (lewat delegate) -> resizeToFitContent() -> butuh
+        // bottomStack.fittingSize; kalau belum ada, crash (force-unwrap nil).
+        bottomStack = NSStackView(views: [separator(), buttonRow, separator(), aboutLabel])
+        bottomStack.orientation = .vertical
+        bottomStack.alignment = .leading
+        bottomStack.spacing = 10
+        bottomStack.edgeInsets = NSEdgeInsets(top: 0, left: 16, bottom: 16, right: 16)
+        bottomStack.translatesAutoresizingMaskIntoConstraints = false
         buttonRow.widthAnchor.constraint(equalToConstant: 358).isActive = true
 
+        tabView.tabViewType = .rightTabsBezelBorder
+        tabView.delegate = self
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+        tabView.addTabViewItem(makeTabItem("Notulen", content: notulenStack, width: tabContentWidth))
+        tabView.addTabViewItem(makeTabItem("Transkripsi", content: transkripsiStack, width: tabContentWidth))
+        tabView.addTabViewItem(makeTabItem("Notulen AI", content: notulenAiStack, width: tabContentWidth))
+
+        let windowStack = NSStackView(views: [tabView, bottomStack])
+        windowStack.orientation = .vertical
+        windowStack.alignment = .leading
+        windowStack.spacing = 0
+        windowStack.translatesAutoresizingMaskIntoConstraints = false
+
         let contentView = NSView()
-        contentView.addSubview(mainStack)
+        contentView.addSubview(windowStack)
         NSLayoutConstraint.activate([
-            mainStack.topAnchor.constraint(equalTo: contentView.topAnchor),
-            mainStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            mainStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            mainStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            windowStack.topAnchor.constraint(equalTo: contentView.topAnchor),
+            windowStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            windowStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            windowStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
         window?.contentView = contentView
         resizeToFitContent()
     }
 
-    /// Hitung ulang & terapkan ukuran window pas dengan konten yang SEDANG terlihat -
-    /// wajib dipanggil ulang tiap kali baris disembunyikan/dimunculkan (lihat
-    /// providerChanged()), karena NSStackView.fittingSize berubah begitu ada arranged
-    /// subview yang isHidden-nya berubah, tapi window TIDAK otomatis mengikuti.
+    /// Hitung ulang & terapkan ukuran window pas dengan konten TAB YANG SEDANG DIPILIH -
+    /// wajib dipanggil ulang tiap kali baris disembunyikan/dimunculkan atau tab berganti,
+    /// karena NSStackView.fittingSize berubah begitu ada arranged subview yang isHidden-nya
+    /// berubah, tapi window TIDAK otomatis mengikuti. Lebar window tetap konstan (supaya
+    /// tidak "meloncat" pindah tab), cuma tinggi yang menyesuaikan tab aktif.
     private func resizeToFitContent() {
         window?.layoutIfNeeded()
-        window?.setContentSize(mainStack.fittingSize)
+        let activeStack = currentTabStack() ?? notulenStack!
+        // Chrome tetap (strip tab kanan + padding NSTabView) ditambahkan ke lebar konten tab.
+        let width = activeStack.fittingSize.width + 150
+        let height = activeStack.fittingSize.height + 30 + bottomStack.fittingSize.height
+        window?.setContentSize(NSSize(width: max(width, 520), height: height))
+    }
+
+    private func currentTabStack() -> NSStackView? {
+        guard let selected = tabView.selectedTabViewItem else { return notulenStack }
+        switch tabView.indexOfTabViewItem(selected) {
+        case 0: return notulenStack
+        case 1: return transkripsiStack
+        case 2: return notulenAiStack
+        default: return nil
+        }
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        resizeToFitContent()
     }
 
     @objc func providerChanged() {
@@ -1038,33 +1121,50 @@ class SettingsWindowController: NSWindowController {
     private func updateNotulenProviderRowsVisibility() {
         let primary = providerPopup.titleOfSelectedItem ?? "claude"
         let fallback = summaryFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
-        claudeRows.forEach { $0.isHidden = !(primary == "claude" || fallback == "claude") }
+        let claudeInRole = (primary == "claude" || fallback == "claude")
+        let isApi = claudeModePopup.titleOfSelectedItem == "api"
+        // claudeRows[0]=Type, [1]=Model(cli), [2]=Model(api), [3]=API Key(api) - cuma 1
+        // Model/API Key yang tampil di satu waktu, sesuai Type yang dipilih (lihat claudeModeChanged()).
+        claudeRows[0].isHidden = !claudeInRole
+        claudeRows[1].isHidden = !(claudeInRole && !isApi)
+        claudeRows[2].isHidden = !(claudeInRole && isApi)
+        claudeRows[3].isHidden = !(claudeInRole && isApi)
         openaiRows.forEach { $0.isHidden = !(primary == "openai" || fallback == "openai") }
         agyRows.forEach { $0.isHidden = !(primary == "agy" || fallback == "agy") }
         opencodeRows.forEach { $0.isHidden = !(primary == "opencode" || fallback == "opencode") }
     }
 
     @objc func transcribeProviderChanged() {
-        let selected = transcribeProviderPopup.titleOfSelectedItem ?? "whisper"
-        whisperRows.forEach { $0.isHidden = selected != "whisper" }
-        geminiRows.forEach { $0.isHidden = selected != "gemini" }
-        openaiTranscribeRows.forEach { $0.isHidden = selected != "openai" }
-        if selected == "whisper" {
+        updateTranscribeRowsVisibility()
+        if transcribeProviderPopup.titleOfSelectedItem == "whisper" {
             checkWhisperModelStatus()
         }
         resizeToFitContent()
     }
 
-    /// Toggle field "Model Whisper (Fallback)" - independen dari transcribeProviderChanged()
+    /// Toggle field Model Fallback Whisper - independen dari transcribeProviderChanged()
     /// karena fallback bisa "whisper" walau provider utamanya BUKAN whisper (mis. utama Gemini,
     /// fallback Whisper lokal) - lihat WHISPER_FALLBACK_MODEL di config.js.
     @objc func transcribeFallbackChanged() {
-        let selected = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
-        whisperFallbackRows.forEach { $0.isHidden = selected != "whisper" }
-        if selected == "whisper" {
+        updateTranscribeRowsVisibility()
+        if transcribeFallbackPopup.titleOfSelectedItem == "whisper" {
             checkWhisperFallbackModelStatus()
         }
         resizeToFitContent()
+    }
+
+    /// Baris API Key/Model Gemini & OpenAI dipakai BERSAMA oleh primary DAN fallback (satu
+    /// config per provider, sama seperti provider notulen) - tampil kalau provider itu dipakai
+    /// di SALAH SATU peran. Whisper primary/fallback TETAP independen (masing-masing punya
+    /// model sendiri, lihat WHISPER_FALLBACK_MODEL) karena whisper lokal wajar dipakai dengan
+    /// model beda di tiap peran.
+    private func updateTranscribeRowsVisibility() {
+        let primary = transcribeProviderPopup.titleOfSelectedItem ?? "whisper"
+        let fallback = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
+        whisperRows.forEach { $0.isHidden = primary != "whisper" }
+        whisperFallbackRows.forEach { $0.isHidden = fallback != "whisper" }
+        geminiRows.forEach { $0.isHidden = !(primary == "gemini" || fallback == "gemini") }
+        openaiTranscribeRows.forEach { $0.isHidden = !(primary == "openai" || fallback == "openai") }
     }
 
     @objc func whisperModelChanged() {
@@ -1343,9 +1443,8 @@ class SettingsWindowController: NSWindowController {
     /// Ini juga yang memperbaiki kasus salah isi field (mis. isi ANTHROPIC_MODEL padahal mode
     /// masih "cli" sehingga perubahannya tidak pernah kepakai).
     @objc func claudeModeChanged() {
-        let isApi = claudeModePopup.titleOfSelectedItem == "api"
-        claudeCliModelField.isEnabled = !isApi
-        claudeApiModelField.isEnabled = isApi
+        updateNotulenProviderRowsVisibility()
+        resizeToFitContent()
     }
 
     /// Ambil daftar model dari endpoint OpenAI-compatible yang sedang diisi di field Base URL
@@ -1422,6 +1521,7 @@ class SettingsWindowController: NSWindowController {
         claudeModePopup.selectItem(withTitle: claudeMode.isEmpty ? "cli" : claudeMode)
         claudeCliModelField.stringValue = readEnvValue(content, "CLAUDE_CLI_MODEL")
         claudeApiModelField.stringValue = readEnvValue(content, "ANTHROPIC_MODEL")
+        claudeApiKeyField.stringValue = readEnvValue(content, "ANTHROPIC_API_KEY")
         claudeModeChanged()
 
         openaiBaseURLField.stringValue = readEnvValue(content, "OPENAI_BASE_URL")
@@ -1469,6 +1569,7 @@ class SettingsWindowController: NSWindowController {
         content = setEnvValue(content, "CLAUDE_MODE", claudeModePopup.titleOfSelectedItem ?? "cli")
         content = setEnvValue(content, "CLAUDE_CLI_MODEL", claudeCliModelField.stringValue)
         content = setEnvValue(content, "ANTHROPIC_MODEL", claudeApiModelField.stringValue)
+        content = setEnvValue(content, "ANTHROPIC_API_KEY", claudeApiKeyField.stringValue)
         content = setEnvValue(content, "OPENAI_BASE_URL", openaiBaseURLField.stringValue)
         content = setEnvValue(content, "OPENAI_API_KEY", openaiApiKeyField.stringValue)
         content = setEnvValue(content, "OPENAI_MODEL", openaiModelField.stringValue)

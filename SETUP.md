@@ -449,7 +449,12 @@ meetresult tray
 
 **Event List** — daftar meeting hari ini + status, klik yang sudah selesai untuk buka notulennya
 
-**Pengaturan...** — edit skema MoM, provider AI (Claude/OpenAI/Antigravity) + model, langsung dari UI native tanpa edit `.env` manual. Ada tombol **Test** untuk verifikasi provider/model yang sedang diisi sebelum disimpan.
+**Pengaturan...** — jendela native (bukan edit `.env` manual), lebih lebar dengan navigasi tab di sisi kanan, 3 tab:
+- **Notulen** — Template MoM, Disusun oleh, Nama Organisasi (berlaku untuk semua skema template)
+- **Transkripsi** — Provider (Whisper/Gemini/OpenAI) + API Key/Model-nya (kosong kalau lokal/Whisper), Fallback Provider + Model Fallback
+- **Notulen AI** — Provider (Claude/OpenAI/Antigravity/OpenCode) + Type/API Key/Model-nya, Fallback Provider
+
+Tombol **Test** (tersedia di semua tab) untuk verifikasi provider/model notulen yang sedang diisi sebelum disimpan.
 
 **Lainnya:**
 - **Buka Notulen** — buka folder `data/summaries` di Finder
