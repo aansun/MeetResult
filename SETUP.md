@@ -451,10 +451,21 @@ meetresult tray
 
 **Pengaturan...** — jendela native (bukan edit `.env` manual), dengan menu navigasi di sisi kiri dan detail pengaturan di kanan (pola macOS System Settings). Ada 3 menu:
 - **Notulen** — Template MoM, Disusun oleh, Nama Organisasi (berlaku untuk semua skema template)
-- **Transkripsi** — Provider + Fallback Provider, lalu grup setting per provider yang dipakai: **Whisper (lokal)** (Model; tanpa API Key karena jalan lokal — plus Model Fallback terpisah kalau Whisper jadi fallback), **Gemini** (API Key + Model), **OpenAI** (API Key + Model)
-- **Notulen AI** — Provider + Fallback Provider, lalu grup setting per provider: **Claude** (Type cli/api, Model, API Key untuk mode api), **OpenAI** (Base URL, API Key, Model), **Antigravity** (Model), **OpenCode** (Model)
+- **Transkripsi** — dua grup terpisah dipisah garis: **Provider** dan **Fallback Provider**
+- **Notulen AI** — sama, dua grup terpisah: **Provider** dan **Fallback Provider**
 
-Grup setting muncul otomatis sesuai provider yang dipakai — baik sebagai provider **utama maupun fallback**. Jadi kombinasi bebas: provider cloud bisa jadi fallback dari lokal, atau sebaliknya, dan setting masing-masing tetap tersedia. Kalau utama & fallback beda provider, kedua grup tampil sekaligus dengan header nama providernya.
+Di menu Transkripsi & Notulen AI, tiap grup berisi dropdown providernya sendiri **beserta seluruh setting milik provider itu** (Type / API Key / Model), sehingga tidak ada kebingungan API Key ini milik provider yang mana. Field yang muncul menyesuaikan provider yang dipilih di grup tersebut:
+
+| Provider | Field yang muncul |
+|---|---|
+| Whisper (lokal) | Model (+ status/unduh model) — tanpa API Key karena jalan lokal |
+| Gemini | API Key, Model |
+| OpenAI (transkripsi) | API Key, Model |
+| Claude | Type (cli/api), Model — plus API Key kalau Type = `api` |
+| OpenAI (notulen) | Base URL, API Key, Model |
+| Antigravity / OpenCode | Model |
+
+Kombinasi bebas: provider cloud bisa jadi fallback dari lokal atau sebaliknya, dan setting masing-masing selalu tersedia di grupnya sendiri. Khusus Whisper, Model untuk peran utama dan fallback memang terpisah (`WHISPER_MODEL` vs `WHISPER_FALLBACK_MODEL`) supaya bisa pakai model berbeda di tiap peran.
 
 Tombol **Test** untuk verifikasi provider/model notulen yang sedang diisi sebelum disimpan.
 

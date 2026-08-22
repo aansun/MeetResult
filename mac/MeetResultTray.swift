@@ -791,16 +791,15 @@ class SettingsWindowController: NSWindowController {
     let detailContainer = NSView()
     private var currentSectionIndex = 0
 
-    // Header nama provider di atas grup field-nya - WAJIB ada karena label field-nya generik
-    // ("API Key:"/"Model:"); kalau provider utama & fallback beda (mis. Gemini + OpenAI), dua
-    // grup tampil sekaligus dan tanpa header ini tidak ketahuan field mana milik provider mana.
-    let claudeHeader = NSTextField(labelWithString: "Claude")
-    let openaiHeader = NSTextField(labelWithString: "OpenAI")
-    let agyHeader = NSTextField(labelWithString: "Antigravity")
-    let opencodeHeader = NSTextField(labelWithString: "OpenCode")
-    let whisperHeader = NSTextField(labelWithString: "Whisper (lokal)")
-    let geminiHeader = NSTextField(labelWithString: "Gemini")
-    let openaiTranscribeHeader = NSTextField(labelWithString: "OpenAI")
+    // Grup setting dipisah per PERAN (bukan per provider): grup "Provider" berisi dropdown
+    // provider utama + type/API key/model MILIK PROVIDER ITU, grup "Fallback Provider" sama
+    // untuk provider cadangan. Isi tiap grup dipindah-pindah secara dinamis oleh
+    // rebuildNotulenGroups()/rebuildTranscribeGroups() mengikuti provider yang dipilih, supaya
+    // tidak ada lagi dua baris "API Key:" berdampingan tanpa ketahuan milik provider mana.
+    let primaryNotulenGroup = NSStackView()
+    let fallbackNotulenGroup = NSStackView()
+    let primaryTranscribeGroup = NSStackView()
+    let fallbackTranscribeGroup = NSStackView()
 
     // --- Transkripsi (Local Whisper / Cloud Gemini / Cloud OpenAI) ---
     let transcribeProviderPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -818,17 +817,33 @@ class SettingsWindowController: NSWindowController {
     let openaiTranscribeApiKeyField = NSSecureTextField(string: "")
     let openaiTranscribeModelField = NSComboBox()
 
-    // claudeRows = [modeRow, cliModelRow, apiModelRow, apiKeyRow] - visibilitas gabungan
-    // (Provider utama ATAU fallback == "claude"), lalu claudeModeChanged() menyembunyikan
-    // salah satu dari cliModelRow/apiModelRow supaya kelihatan seperti 1 slot "Model:" saja.
-    var claudeRows: [NSStackView] = []
-    var openaiRows: [NSStackView] = []
-    var agyRows: [NSStackView] = []
-    var opencodeRows: [NSStackView] = []
-    var whisperRows: [NSStackView] = []
-    var whisperFallbackRows: [NSStackView] = []
-    var geminiRows: [NSStackView] = []
-    var openaiTranscribeRows: [NSStackView] = []
+    // Baris field per provider - dibuat sekali di buildUI(), lalu DIPINDAHKAN antar grup
+    // Provider/Fallback sesuai peran provider tersebut (lihat rebuild*Groups()). Karena
+    // provider utama & fallback selalu berbeda (fallback == primary = fallback nonaktif di
+    // summarizer.js/transcriber.js), satu baris tidak akan pernah dibutuhkan di dua grup
+    // sekaligus - jadi aman dipindah, tidak perlu duplikat field.
+    var providerRow: NSStackView!
+    var summaryFallbackRow: NSStackView!
+    var claudeTypeRow: NSStackView!
+    var claudeCliModelRow: NSStackView!
+    var claudeApiModelRow: NSStackView!
+    var claudeApiKeyRow: NSStackView!
+    var openaiBaseRow: NSStackView!
+    var openaiKeyRow: NSStackView!
+    var openaiModelRow: NSStackView!
+    var agyModelRow: NSStackView!
+    var opencodeModelRow: NSStackView!
+
+    var transcribeProviderRow: NSStackView!
+    var transcribeFallbackRow: NSStackView!
+    var whisperModelRow: NSStackView!
+    var whisperStatusRow: NSStackView!
+    var whisperFallbackModelRow: NSStackView!
+    var whisperFallbackStatusRow: NSStackView!
+    var geminiKeyRow: NSStackView!
+    var geminiModelRow: NSStackView!
+    var openaiTranscribeKeyRow: NSStackView!
+    var openaiTranscribeModelRow: NSStackView!
     var notulenStack: NSStackView!
     var transkripsiStack: NSStackView!
     var notulenAiStack: NSStackView!
@@ -962,33 +977,29 @@ class SettingsWindowController: NSWindowController {
         refreshModelsButton.toolTip = "Ambil daftar model dari server (Base URL)"
         openaiModelField.placeholderString = "pilih dari daftar atau ketik manual"
 
-        // claudeRows[0]=Type, [1]=Model(mode cli), [2]=Model(mode api), [3]=API Key(mode api) -
-        // [1]/[2] & [3] ditoggle oleh updateClaudeRowsVisibility() supaya kelihatan seperti
-        // 1 slot "Model:"/"API Key:" generik yang berubah sesuai Type, bukan 3 baris sekaligus.
-        claudeRows = [
-            row("Type:", claudeModePopup),
-            row("Model:", claudeCliModelField),
-            row("Model:", claudeApiModelField),
-            row("API Key:", claudeApiKeyField),
-        ]
-        let openaiBaseRow = row("Base URL:", openaiBaseURLField)
-        let openaiKeyRow = row("API Key:", openaiApiKeyField)
-        let openaiModelRow = row("Model:", openaiModelField, trailing: refreshModelsButton)
-        openaiRows = [openaiBaseRow, openaiKeyRow, openaiModelRow]
+        providerRow = row("Provider:", providerPopup)
+        summaryFallbackRow = row("Provider:", summaryFallbackPopup)
+        // Claude punya 2 varian Model (CLI vs API) - yang tampil menyesuaikan Type yang dipilih,
+        // jadi di layar tetap kelihatan sebagai satu slot "Model:" (lihat notulenRows(for:)).
+        claudeTypeRow = row("Type:", claudeModePopup)
+        claudeCliModelRow = row("Model:", claudeCliModelField)
+        claudeApiModelRow = row("Model:", claudeApiModelField)
+        claudeApiKeyRow = row("API Key:", claudeApiKeyField)
+        openaiBaseRow = row("Base URL:", openaiBaseURLField)
+        openaiKeyRow = row("API Key:", openaiApiKeyField)
+        openaiModelRow = row("Model:", openaiModelField, trailing: refreshModelsButton)
 
         refreshAgyModelsButton.target = self
         refreshAgyModelsButton.action = #selector(refreshAgyModels)
         refreshAgyModelsButton.toolTip = "Ambil daftar model dari `agy models`"
         agyModelField.placeholderString = "kosongkan untuk default sesi agy"
-        let agyModelRow = row("Model:", agyModelField, trailing: refreshAgyModelsButton)
-        agyRows = [agyModelRow]
+        agyModelRow = row("Model:", agyModelField, trailing: refreshAgyModelsButton)
 
         refreshOpencodeModelsButton.target = self
         refreshOpencodeModelsButton.action = #selector(refreshOpencodeModels)
         refreshOpencodeModelsButton.toolTip = "Ambil daftar model dari `opencode models`"
         opencodeModelField.placeholderString = "format provider/model, mis. opencode/gemini-3.7-flash"
-        let opencodeModelRow = row("Model:", opencodeModelField, trailing: refreshOpencodeModelsButton)
-        opencodeRows = [opencodeModelRow]
+        opencodeModelRow = row("Model:", opencodeModelField, trailing: refreshOpencodeModelsButton)
 
         // --- Transkripsi: Local (Whisper) / Cloud (Gemini) / Cloud (OpenAI) ---
         transcribeProviderPopup.addItems(withTitles: ["whisper", "gemini", "openai"])
@@ -1007,38 +1018,37 @@ class SettingsWindowController: NSWindowController {
         whisperActionButton.action = #selector(whisperActionButtonClicked)
         whisperStatusLabel.font = NSFont.systemFont(ofSize: 11)
         whisperStatusLabel.textColor = .secondaryLabelColor
-        // Whisper jalan lokal - tidak butuh API Key sama sekali (baris "API Key" otomatis
-        // tidak muncul kalau provider transkripsi/fallback-nya whisper).
-        let whisperModelRow = row("Model:", whisperModelField, trailing: whisperActionButton)
-        let whisperStatusRow = NSStackView(views: [NSView(), whisperStatusLabel])
+        // Whisper jalan lokal - tidak butuh API Key sama sekali, jadi grupnya memang cuma
+        // berisi Model (+ status/unduh model).
+        transcribeProviderRow = row("Provider:", transcribeProviderPopup)
+        transcribeFallbackRow = row("Provider:", transcribeFallbackPopup)
+        whisperModelRow = row("Model:", whisperModelField, trailing: whisperActionButton)
+        whisperStatusRow = NSStackView(views: [NSView(), whisperStatusLabel])
         whisperStatusRow.orientation = .horizontal
-        whisperRows = [whisperModelRow, whisperStatusRow]
 
-        // Model Whisper khusus untuk peran FALLBACK - kosongkan untuk pakai model yang sama
-        // dengan Model primary di atas (lihat WHISPER_FALLBACK_MODEL).
+        // Model Whisper khusus untuk peran FALLBACK - field TERPISAH dari model primary
+        // (WHISPER_MODEL vs WHISPER_FALLBACK_MODEL), karena wajar dipakai dengan model beda di
+        // tiap peran (mis. utama large-v3 paling akurat, fallback medium yang lebih cepat).
         whisperFallbackModelField.addItems(withObjectValues: knownWhisperModels)
-        whisperFallbackModelField.placeholderString = "kosongkan untuk pakai model yang sama seperti di atas"
+        whisperFallbackModelField.placeholderString = "kosongkan untuk pakai model provider utama"
         whisperFallbackModelField.target = self
         whisperFallbackModelField.action = #selector(whisperFallbackModelChanged)
         whisperFallbackActionButton.target = self
         whisperFallbackActionButton.action = #selector(whisperFallbackActionButtonClicked)
         whisperFallbackStatusLabel.font = NSFont.systemFont(ofSize: 11)
         whisperFallbackStatusLabel.textColor = .secondaryLabelColor
-        let whisperFallbackModelRow = row("Model Fallback:", whisperFallbackModelField, trailing: whisperFallbackActionButton)
-        let whisperFallbackStatusRow = NSStackView(views: [NSView(), whisperFallbackStatusLabel])
+        whisperFallbackModelRow = row("Model:", whisperFallbackModelField, trailing: whisperFallbackActionButton)
+        whisperFallbackStatusRow = NSStackView(views: [NSView(), whisperFallbackStatusLabel])
         whisperFallbackStatusRow.orientation = .horizontal
-        whisperFallbackRows = [whisperFallbackModelRow, whisperFallbackStatusRow]
 
         geminiModelField.placeholderString = "cek nama model audio-capable terbaru di Google AI Studio"
-        openaiTranscribeApiKeyField.placeholderString = "kosongkan untuk pakai API Key OpenAI notulen di tab lain"
-        let geminiKeyRow = row("API Key:", geminiApiKeyField)
-        let geminiModelRow = row("Model:", geminiModelField)
-        geminiRows = [geminiKeyRow, geminiModelRow]
+        openaiTranscribeApiKeyField.placeholderString = "kosongkan untuk pakai OPENAI_API_KEY"
+        geminiKeyRow = row("API Key:", geminiApiKeyField)
+        geminiModelRow = row("Model:", geminiModelField)
 
         openaiTranscribeModelField.addItems(withObjectValues: knownOpenAiTranscribeModels)
-        let openaiTranscribeKeyRow = row("API Key:", openaiTranscribeApiKeyField)
-        let openaiTranscribeModelRow = row("Model:", openaiTranscribeModelField)
-        openaiTranscribeRows = [openaiTranscribeKeyRow, openaiTranscribeModelRow]
+        openaiTranscribeKeyRow = row("API Key:", openaiTranscribeApiKeyField)
+        openaiTranscribeModelRow = row("Model:", openaiTranscribeModelField)
 
         testButton.target = self
         testButton.action = #selector(testCurrentModel)
@@ -1063,36 +1073,30 @@ class SettingsWindowController: NSWindowController {
             row("Nama Organisasi:", orgNameField),
         ])
 
-        // --- Section 2: Transkripsi ---
-        // Provider & Fallback dipilih di atas, lalu grup setting per provider muncul di bawah
-        // sesuai yang dipakai - jadi provider cloud/lokal sama-sama bisa jadi utama MAUPUN
-        // fallback, dengan setting-nya masing-masing.
+        // --- Section 2 & 3: dua grup per section (Provider & Fallback Provider), masing-masing
+        // lengkap dengan type/API key/model milik provider yang dipilih di grup itu, dipisah
+        // garis. Isi grup diatur dinamis oleh rebuildTranscribeGroups()/rebuildNotulenGroups().
+        for group in [primaryTranscribeGroup, fallbackTranscribeGroup, primaryNotulenGroup, fallbackNotulenGroup] {
+            group.orientation = .vertical
+            group.alignment = .leading
+            group.spacing = 10
+            group.translatesAutoresizingMaskIntoConstraints = false
+        }
+
         transkripsiStack = NSStackView(views: [
-            row("Provider:", transcribeProviderPopup),
-            row("Fallback Provider:", transcribeFallbackPopup),
+            groupHeader(NSTextField(labelWithString: "Provider")),
+            primaryTranscribeGroup,
             separator(),
-            groupHeader(whisperHeader),
-            whisperRows[0], whisperRows[1],
-            whisperFallbackRows[0], whisperFallbackRows[1],
-            groupHeader(geminiHeader),
-            geminiRows[0], geminiRows[1],
-            groupHeader(openaiTranscribeHeader),
-            openaiTranscribeRows[0], openaiTranscribeRows[1],
+            groupHeader(NSTextField(labelWithString: "Fallback Provider")),
+            fallbackTranscribeGroup,
         ])
 
-        // --- Section 3: Notulen AI ---
         notulenAiStack = NSStackView(views: [
-            row("Provider:", providerPopup),
-            row("Fallback Provider:", summaryFallbackPopup),
+            groupHeader(NSTextField(labelWithString: "Provider")),
+            primaryNotulenGroup,
             separator(),
-            groupHeader(claudeHeader),
-            claudeRows[0], claudeRows[1], claudeRows[2], claudeRows[3],
-            groupHeader(openaiHeader),
-            openaiBaseRow, openaiKeyRow, openaiModelRow,
-            groupHeader(agyHeader),
-            agyRows[0],
-            groupHeader(opencodeHeader),
-            opencodeRows[0],
+            groupHeader(NSTextField(labelWithString: "Fallback Provider")),
+            fallbackNotulenGroup,
         ])
 
         for stack in [notulenStack, transkripsiStack, notulenAiStack] {
@@ -1151,6 +1155,10 @@ class SettingsWindowController: NSWindowController {
             windowStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
         window?.contentView = contentView
+        // Isi awal kedua grup sebelum section pertama ditampilkan - loadValues() akan menyusun
+        // ulang lagi setelah baca .env, ini cuma supaya grup tidak kosong saat layout pertama.
+        rebuildNotulenGroups()
+        rebuildTranscribeGroups()
         selectSection(0)
     }
 
@@ -1165,7 +1173,7 @@ class SettingsWindowController: NSWindowController {
     }
 
     @objc func providerChanged() {
-        updateNotulenProviderRowsVisibility()
+        rebuildNotulenGroups()
         resizeToFitContent()
     }
 
@@ -1174,75 +1182,89 @@ class SettingsWindowController: NSWindowController {
     /// harus tetap kelihatan & bisa diedit kalau provider itu dipakai di SALAH SATU peran
     /// (utama ATAU fallback), bukan cuma kalau jadi provider utama.
     @objc func summaryFallbackChanged() {
-        updateNotulenProviderRowsVisibility()
+        rebuildNotulenGroups()
         resizeToFitContent()
     }
 
-    private func updateNotulenProviderRowsVisibility() {
+    /// Baris field milik provider `name` untuk section Notulen AI. `isFallback` hanya dipakai
+    /// untuk menentukan dropdown provider mana yang dipasang di baris pertama grup.
+    private func notulenRows(for name: String, isFallback: Bool) -> [NSView] {
+        let providerSelector: NSView = isFallback ? summaryFallbackRow : providerRow
+        switch name {
+        case "claude":
+            // Claude punya 2 mode: "cli" (pakai Claude Code CLI yang sudah login, tanpa API key)
+            // dan "api" (Anthropic API langsung, butuh API key) - field yang relevan saja yang
+            // dipasang, jadi user tidak melihat field yang tidak akan terpakai.
+            let isApi = claudeModePopup.titleOfSelectedItem == "api"
+            return [providerSelector, claudeTypeRow, isApi ? claudeApiModelRow : claudeCliModelRow]
+                + (isApi ? [claudeApiKeyRow!] : [])
+        case "openai":
+            return [providerSelector, openaiBaseRow, openaiKeyRow, openaiModelRow]
+        case "agy":
+            return [providerSelector, agyModelRow]
+        case "opencode":
+            return [providerSelector, opencodeModelRow]
+        default: // fallbackDisabledLabel
+            return [providerSelector]
+        }
+    }
+
+    /// Baris field milik provider `name` untuk section Transkripsi. Whisper punya field Model
+    /// TERPISAH untuk peran utama vs fallback (WHISPER_MODEL vs WHISPER_FALLBACK_MODEL) - wajar
+    /// dipakai dengan model beda di tiap peran (mis. utama large-v3 paling akurat, fallback
+    /// medium yang lebih cepat), jadi baris yang dipasang berbeda tergantung peran.
+    private func transcribeRows(for name: String, isFallback: Bool) -> [NSView] {
+        let providerSelector: NSView = isFallback ? transcribeFallbackRow : transcribeProviderRow
+        switch name {
+        case "whisper":
+            // Whisper jalan lokal - tidak butuh API Key sama sekali.
+            return isFallback
+                ? [providerSelector, whisperFallbackModelRow, whisperFallbackStatusRow]
+                : [providerSelector, whisperModelRow, whisperStatusRow]
+        case "gemini":
+            return [providerSelector, geminiKeyRow, geminiModelRow]
+        case "openai":
+            return [providerSelector, openaiTranscribeKeyRow, openaiTranscribeModelRow]
+        default: // fallbackDisabledLabel
+            return [providerSelector]
+        }
+    }
+
+    /// Susun ulang isi grup Provider & Fallback Provider sesuai provider yang dipilih di
+    /// masing-masing peran. Baris field DIPINDAHKAN (bukan diduplikat) antar grup - aman karena
+    /// provider utama & fallback tidak pernah sama (fallback == primary = fallback nonaktif).
+    private func rebuildNotulenGroups() {
         let primary = providerPopup.titleOfSelectedItem ?? "claude"
         let fallback = summaryFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
-        // Provider dipakai kalau jadi provider UTAMA ATAU FALLBACK - keduanya butuh setting
-        // (API key/model) yang sama, jadi 1 grup field dipakai bersama untuk kedua peran.
-        func inRole(_ name: String) -> Bool { primary == name || fallback == name }
+        primaryNotulenGroup.setViews([], in: .top)
+        fallbackNotulenGroup.setViews([], in: .top)
+        primaryNotulenGroup.setViews(notulenRows(for: primary, isFallback: false), in: .top)
+        fallbackNotulenGroup.setViews(notulenRows(for: fallback, isFallback: true), in: .top)
+    }
 
-        let claudeInRole = inRole("claude")
-        let isApi = claudeModePopup.titleOfSelectedItem == "api"
-        // claudeRows[0]=Type, [1]=Model(cli), [2]=Model(api), [3]=API Key(api) - cuma 1
-        // Model/API Key yang tampil di satu waktu, sesuai Type yang dipilih (lihat claudeModeChanged()).
-        claudeHeader.isHidden = !claudeInRole
-        claudeRows[0].isHidden = !claudeInRole
-        claudeRows[1].isHidden = !(claudeInRole && !isApi)
-        claudeRows[2].isHidden = !(claudeInRole && isApi)
-        claudeRows[3].isHidden = !(claudeInRole && isApi)
-
-        openaiHeader.isHidden = !inRole("openai")
-        openaiRows.forEach { $0.isHidden = !inRole("openai") }
-        agyHeader.isHidden = !inRole("agy")
-        agyRows.forEach { $0.isHidden = !inRole("agy") }
-        opencodeHeader.isHidden = !inRole("opencode")
-        opencodeRows.forEach { $0.isHidden = !inRole("opencode") }
+    private func rebuildTranscribeGroups() {
+        let primary = transcribeProviderPopup.titleOfSelectedItem ?? "whisper"
+        let fallback = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
+        primaryTranscribeGroup.setViews([], in: .top)
+        fallbackTranscribeGroup.setViews([], in: .top)
+        primaryTranscribeGroup.setViews(transcribeRows(for: primary, isFallback: false), in: .top)
+        fallbackTranscribeGroup.setViews(transcribeRows(for: fallback, isFallback: true), in: .top)
     }
 
     @objc func transcribeProviderChanged() {
-        updateTranscribeRowsVisibility()
+        rebuildTranscribeGroups()
         if transcribeProviderPopup.titleOfSelectedItem == "whisper" {
             checkWhisperModelStatus()
         }
         resizeToFitContent()
     }
 
-    /// Toggle field Model Fallback Whisper - independen dari transcribeProviderChanged()
-    /// karena fallback bisa "whisper" walau provider utamanya BUKAN whisper (mis. utama Gemini,
-    /// fallback Whisper lokal) - lihat WHISPER_FALLBACK_MODEL di config.js.
     @objc func transcribeFallbackChanged() {
-        updateTranscribeRowsVisibility()
+        rebuildTranscribeGroups()
         if transcribeFallbackPopup.titleOfSelectedItem == "whisper" {
             checkWhisperFallbackModelStatus()
         }
         resizeToFitContent()
-    }
-
-    /// Baris API Key/Model Gemini & OpenAI dipakai BERSAMA oleh primary DAN fallback (satu
-    /// config per provider, sama seperti provider notulen) - tampil kalau provider itu dipakai
-    /// di SALAH SATU peran. Whisper primary/fallback TETAP independen (masing-masing punya
-    /// model sendiri, lihat WHISPER_FALLBACK_MODEL) karena whisper lokal wajar dipakai dengan
-    /// model beda di tiap peran.
-    private func updateTranscribeRowsVisibility() {
-        let primary = transcribeProviderPopup.titleOfSelectedItem ?? "whisper"
-        let fallback = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
-        func inRole(_ name: String) -> Bool { primary == name || fallback == name }
-
-        // Whisper punya field Model TERPISAH untuk peran utama & fallback (WHISPER_MODEL vs
-        // WHISPER_FALLBACK_MODEL) - wajar dipakai dengan model beda di tiap peran (mis. utama
-        // large-v3 paling akurat, fallback medium yang lebih cepat).
-        whisperHeader.isHidden = !inRole("whisper")
-        whisperRows.forEach { $0.isHidden = primary != "whisper" }
-        whisperFallbackRows.forEach { $0.isHidden = fallback != "whisper" }
-
-        geminiHeader.isHidden = !inRole("gemini")
-        geminiRows.forEach { $0.isHidden = !inRole("gemini") }
-        openaiTranscribeHeader.isHidden = !inRole("openai")
-        openaiTranscribeRows.forEach { $0.isHidden = !inRole("openai") }
     }
 
     @objc func whisperModelChanged() {
@@ -1516,12 +1538,12 @@ class SettingsWindowController: NSWindowController {
         return bin.isEmpty ? "agy" : bin
     }
 
-    /// Nonaktifkan field model yang TIDAK relevan dengan mode Claude yang sedang dipilih -
-    /// CLAUDE_CLI_MODEL cuma dipakai kalau mode "cli", ANTHROPIC_MODEL cuma kalau mode "api".
-    /// Ini juga yang memperbaiki kasus salah isi field (mis. isi ANTHROPIC_MODEL padahal mode
-    /// masih "cli" sehingga perubahannya tidak pernah kepakai).
+    /// Ganti field yang tampil sesuai mode Claude yang dipilih - mode "cli" pakai
+    /// CLAUDE_CLI_MODEL (tanpa API key, karena pakai Claude Code CLI yang sudah login), mode
+    /// "api" pakai ANTHROPIC_MODEL + ANTHROPIC_API_KEY. Field yang tidak relevan tidak
+    /// ditampilkan sama sekali, supaya tidak salah isi field yang tidak akan terpakai.
     @objc func claudeModeChanged() {
-        updateNotulenProviderRowsVisibility()
+        rebuildNotulenGroups()
         resizeToFitContent()
     }
 
