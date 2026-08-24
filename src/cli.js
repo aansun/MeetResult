@@ -96,8 +96,8 @@ program
     "Mode otomatis: pantau kalender Outlook & rekam meeting Teams secara otomatis sesuai jadwal"
   )
   .action(() => {
+    const { metaFile } = require("./utils/watcherMeta");
     const pidFile = path.join(config.DATA_DIR, "watcher.pid");
-    const metaFile = path.join(config.DATA_DIR, "watcher-meta.json");
     fs.writeFileSync(pidFile, String(process.pid), "utf-8");
     // Dicatat supaya tray bisa deteksi kalau source code (src/**, bin/**) berubah SETELAH
     // proses watcher ini start - Node.js hanya baca file sekali saat start, jadi proses yang

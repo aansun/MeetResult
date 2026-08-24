@@ -141,6 +141,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var restartStaleSeparator: NSMenuItem!
     var restartStaleItem: NSMenuItem!
     var hasNotifiedStale = false
+    // Muncul kalau fetch kalender (ICS) gagal berulang kali - mis. laptop sempat tidur/lepas
+    // WiFi berjam-jam tanpa disadari, sebelumnya baru ketahuan setelah ada meeting terlewat.
+    var calendarWarningSeparator: NSMenuItem!
+    var calendarWarningItem: NSMenuItem!
+    var hasNotifiedCalendarFailure = false
+    let calendarFailureNotifyThreshold = 3
 
     // Submenu Rekam Manual
     var manualStatusMenuItem: NSMenuItem!
@@ -206,6 +212,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         restartStaleItem.target = self
         restartStaleItem.isHidden = true
         watchMenu.addItem(restartStaleItem)
+
+        // Muncul HANYA kalau fetch kalender lagi gagal berulang - lihat updateStatus().
+        calendarWarningSeparator = NSMenuItem.separator()
+        calendarWarningSeparator.isHidden = true
+        watchMenu.addItem(calendarWarningSeparator)
+
+        calendarWarningItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        calendarWarningItem.isEnabled = false
+        calendarWarningItem.isHidden = true
+        watchMenu.addItem(calendarWarningItem)
 
         let watchMenuItem = NSMenuItem(title: "Watch", action: nil, keyEquivalent: "")
         watchMenuItem.submenu = watchMenu
@@ -421,6 +437,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return parseIsoDate(iso)
     }
 
+    /// (jumlah gagal fetch kalender berturut-turut, pesan error terakhir) dari watcher-meta.json
+    /// - ditulis oleh checkAndAct() di watcher.js tiap siklus polling. (0, nil) kalau file tidak
+    /// ada, watcher tidak jalan, atau field ini belum pernah ditulis (mis. baru saja di-restart).
+    func calendarFailureStatus() -> (count: Int, lastError: String?) {
+        guard let data = fm.contents(atPath: watcherMetaFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (0, nil)
+        }
+        let count = (json["consecutiveCalendarFailures"] as? NSNumber)?.intValue ?? 0
+        let lastError = json["lastCalendarError"] as? String
+        return (count, lastError)
+    }
+
     /// Waktu modifikasi TERBARU di antara semua file .js di src/ & bin/, PLUS file .env -
     /// dipakai sebagai proxy "kapan source code/konfigurasi terakhir berubah", baik lewat
     /// `git pull` (meetresult update), edit manual, MAUPUN lewat window Pengaturan.
@@ -505,6 +534,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             hasNotifiedStale = false
+        }
+
+        // Peringatan kalau fetch kalender (ICS) gagal berulang kali - baru ketahuan sebelumnya
+        // hanya setelah ada meeting yang terlewat karena watcher "diam" tanpa pemberitahuan.
+        let (calendarFailures, calendarError) = calendarFailureStatus()
+        let calendarFailing = running && calendarFailures >= calendarFailureNotifyThreshold
+        calendarWarningSeparator.isHidden = !calendarFailing
+        calendarWarningItem.isHidden = !calendarFailing
+        if calendarFailing {
+            calendarWarningItem.title = "\u{26A0}\u{FE0F} Kalender gagal fetch \(calendarFailures)x - cek internet"
+            if !hasNotifiedCalendarFailure {
+                hasNotifiedCalendarFailure = true
+                showNotification(
+                    title: "MeetResult",
+                    message: "Gagal mengambil jadwal kalender \(calendarFailures)x berturut-turut (\(calendarError ?? "koneksi bermasalah")) - meeting baru mungkin tidak terekam otomatis sampai ini pulih. Cek koneksi internet."
+                )
+            }
+        } else {
+            hasNotifiedCalendarFailure = false
         }
 
         // Rekaman manual HARUS nonaktif kalau sedang ada rekaman aktif dari sumber manapun
@@ -600,6 +648,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func restartWatcher() {
         killAllWatcherProcesses()
         hasNotifiedStale = false
+        hasNotifiedCalendarFailure = false
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             // Jaring pengaman kedua: pastikan benar-benar bersih (mis. proses lama butuh

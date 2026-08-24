@@ -350,6 +350,12 @@ Kedua sinyal (Teams tidak jalan **dan** audio diam) harus sama-sama terpenuhi se
 
 > Proteksi ini **tidak berlaku** untuk rekam manual (`meetresult record`) — itu selalu keputusan eksplisit kamu.
 
+### Peringatan kalau fetch kalender gagal berulang
+
+Watcher polling kalender Outlook tiap `WATCH_INTERVAL_MINUTES` (default 2 menit) — kalau fetch-nya gagal (mis. laptop sempat tidur/lepas WiFi berjam-jam tanpa disadari), sebelumnya ini cuma tercatat diam-diam di `data/watcher.log` dan baru ketahuan setelah ada meeting yang terlewat.
+
+Sekarang kalau fetch kalender gagal **3 kali berturut-turut**, muncul notifikasi macOS sekali + baris peringatan di menu tray (Watch submenu): "⚠️ Kalender gagal fetch Nx - cek internet". Notifikasi cuma sekali per insiden (tidak spam tiap 2 menit) dan otomatis hilang begitu fetch berhasil lagi.
+
 ## 8. Cara Pakai
 
 ### Login ke Outlook

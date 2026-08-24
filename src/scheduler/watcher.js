@@ -9,6 +9,7 @@ const { cleanupOldRecordings } = require("../utils/retention");
 const { isTeamsRunning } = require("../utils/teamsDetect");
 const { hasRecentAudioActivity } = require("../utils/audioActivity");
 const { checkAndRepairClaudeCliSymlinks } = require("../utils/claudeCliHealth");
+const { updateWatcherMeta, readWatcherMeta } = require("../utils/watcherMeta");
 
 let stopTimer = null;
 
@@ -126,9 +127,33 @@ async function checkAndAct() {
       }
     }
 
-    const meetings = await getUpcomingTeamsMeetings({
-      minutesAhead: config.watch.leadMinutes + config.watch.intervalMinutes + 5,
-    });
+    // Fetch kalender dibungkus try/catch TERPISAH dari sisanya (bukan cuma andalkan catch di
+    // luar) supaya "gagal fetch kalender" bisa dibedakan dari error lain, dan tercatat ke
+    // watcher-meta.json untuk ditampilkan sebagai peringatan di tray - fetch yang gagal diam-diam
+    // berjam-jam (mis. laptop sempat tidur/lepas WiFi) sebelumnya baru ketahuan setelah ada
+    // meeting yang terlewat.
+    let meetings;
+    try {
+      meetings = await getUpcomingTeamsMeetings({
+        minutesAhead: config.watch.leadMinutes + config.watch.intervalMinutes + 5,
+      });
+      updateWatcherMeta({
+        lastCalendarCheckAt: new Date().toISOString(),
+        lastCalendarOk: true,
+        lastCalendarSuccessAt: new Date().toISOString(),
+        lastCalendarError: null,
+        consecutiveCalendarFailures: 0,
+      });
+    } catch (err) {
+      const prevFailures = readWatcherMeta().consecutiveCalendarFailures || 0;
+      updateWatcherMeta({
+        lastCalendarCheckAt: new Date().toISOString(),
+        lastCalendarOk: false,
+        lastCalendarError: err.message,
+        consecutiveCalendarFailures: prevFailures + 1,
+      });
+      throw err;
+    }
 
     const now = Date.now();
 
