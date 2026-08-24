@@ -166,6 +166,12 @@ module.exports = {
   watch: {
     intervalMinutes: Number(process.env.WATCH_INTERVAL_MINUTES || 2),
     leadMinutes: Number(process.env.RECORD_LEAD_MINUTES || 1),
+    // Kalau jadwal kalender sudah selesai TAPI Microsoft Teams masih berjalan (meeting molor
+    // dari jadwal), rekaman TIDAK langsung dipotong - diperpanjang & dicek ulang tiap
+    // `overtimeCheckIntervalMinutes` sampai Teams ditutup, maksimal `maxOvertimeMinutes` di
+    // atas jadwal selesai (jaring pengaman kalau lupa nutup Teams / meeting jadi sangat panjang).
+    maxOvertimeMinutes: Number(process.env.MAX_MEETING_OVERTIME_MINUTES || 120),
+    overtimeCheckIntervalMinutes: Number(process.env.MEETING_OVERTIME_CHECK_INTERVAL_MINUTES || 3),
   },
 
   detection: {

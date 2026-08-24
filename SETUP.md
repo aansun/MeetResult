@@ -397,6 +397,8 @@ meetresult watch
 ```
 Aplikasi akan memantau kalender setiap beberapa menit, otomatis mulai rekam saat meeting Teams dimulai, dan otomatis berhenti + transkrip + buat notulen saat meeting selesai.
 
+**Kalau meeting molor dari jadwal kalender** (mis. dijadwalkan 30 menit tapi diskusi masih berlangsung), rekaman **tidak langsung dipotong** di waktu jadwal - watcher cek dulu apakah Microsoft Teams masih berjalan. Kalau masih, rekaman diperpanjang otomatis & dicek ulang tiap `MEETING_OVERTIME_CHECK_INTERVAL_MINUTES` (default 3 menit) sampai Teams ditutup, maksimal `MAX_MEETING_OVERTIME_MINUTES` (default 120 menit) di atas jadwal selesai sebagai jaring pengaman.
+
 ### Rekam manual
 
 ```bash

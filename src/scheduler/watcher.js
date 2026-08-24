@@ -84,8 +84,43 @@ function scheduleSilenceCheck(record, state, stopInMs) {
 }
 
 /**
+ * True kalau meeting yang jadwalnya sudah lewat MASIH boleh terus direkam (Teams masih
+ * berjalan DAN belum melebihi batas overtime maksimum) - dipakai bareng oleh scheduleAutoStop()
+ * (fast path) dan reconcile di checkAndAct() (jaring pengaman) supaya keduanya konsisten,
+ * tidak ada jalur yang memotong rekaman padahal jalur lain baru saja memutuskan memperpanjang.
+ */
+function shouldExtendPastSchedule(endMs) {
+  const overtimeMs = Date.now() - endMs;
+  if (overtimeMs >= config.watch.maxOvertimeMinutes * 60 * 1000) return false;
+  return isTeamsRunning();
+}
+
+/**
+ * Jadwalkan pengecekan auto-stop untuk 1 meeting - kalau waktunya tiba dan Teams TERNYATA
+ * masih berjalan (meeting molor dari jadwal kalender), rekaman TIDAK dipotong, diperpanjang &
+ * dicek ulang tiap `overtimeCheckIntervalMinutes` sampai Teams ditutup atau melewati
+ * `maxOvertimeMinutes` (lihat shouldExtendPastSchedule()).
+ */
+function scheduleAutoStop(record, endMs, delayMs) {
+  setTimeout(async () => {
+    if (recorder.getActiveMeetingId() !== record.id) return; // sudah berhenti lebih dulu
+
+    if (shouldExtendPastSchedule(endMs)) {
+      const overtimeMin = Math.round((Date.now() - endMs) / 60000);
+      logger.info(
+        `Rapat "${record.subject}" sudah lewat jadwal selesai ${overtimeMin} menit tapi Teams masih berjalan - rekaman diperpanjang, dicek ulang ${config.watch.overtimeCheckIntervalMinutes} menit lagi.`
+      );
+      scheduleAutoStop(record, endMs, config.watch.overtimeCheckIntervalMinutes * 60 * 1000);
+      return;
+    }
+
+    await stopActiveRecording(record);
+  }, delayMs);
+}
+
+/**
  * Hentikan rekaman aktif untuk 1 meeting record, gabungkan audio, lalu lanjut ke
- * pipeline transkrip+notulen. Dipakai baik oleh setTimeout auto-stop (fast path)
+ * pipeline transkrip+notulen. Dipakai baik oleh scheduleAutoStop() (fast path)
  * maupun oleh mekanisme reconcile di checkAndAct() (jaring pengaman).
  */
 async function stopActiveRecording(record) {
@@ -118,9 +153,12 @@ async function checkAndAct() {
       if (activeRecord && activeRecord.status === "recording" && activeRecord.end) {
         const endMs = new Date(activeRecord.end).getTime();
         const graceMs = 60 * 1000; // buffer 1 menit, sama seperti jadwal auto-stop normal
-        if (Date.now() >= endMs + graceMs) {
+        // Jaring pengaman ini HARUS ikut cek Teams/overtime juga (bukan cuma waktu) - kalau
+        // tidak, meeting yang molor & sedang diperpanjang scheduleAutoStop() bisa langsung
+        // dipotong paksa di sini begitu watcher sempat restart di tengah perpanjangan.
+        if (Date.now() >= endMs + graceMs && !shouldExtendPastSchedule(endMs)) {
           logger.warn(
-            `Rekaman "${activeRecord.subject}" melewati jadwal selesai (kemungkinan timer auto-stop hilang karena watcher sempat restart) - menghentikan sekarang.`
+            `Rekaman "${activeRecord.subject}" melewati jadwal selesai (Teams sudah tidak berjalan, atau timer auto-stop hilang karena watcher sempat restart) - menghentikan sekarang.`
           );
           await stopActiveRecording(activeRecord);
         }
@@ -210,13 +248,11 @@ async function checkAndAct() {
         // Jadwalkan auto-stop tepat saat waktu selesai meeting (+ buffer 1 menit) - ini
         // "fast path" (stop tepat waktu tanpa nunggu siklus polling berikutnya). Kalau proses
         // watcher restart sebelum timer ini sempat jalan, mekanisme reconcile di atas akan
-        // jadi jaring pengaman (stop maksimal telat WATCH_INTERVAL_MINUTES).
+        // jadi jaring pengaman (stop maksimal telat WATCH_INTERVAL_MINUTES). Kalau meeting
+        // molor dari jadwal (Teams masih berjalan), scheduleAutoStop() memperpanjang otomatis
+        // alih-alih memotong rekaman di tengah meeting - lihat shouldExtendPastSchedule().
         const stopInMs = endMs - now + 60 * 1000;
-        setTimeout(async () => {
-          if (recorder.getActiveMeetingId() === record.id) {
-            await stopActiveRecording(record);
-          }
-        }, Math.max(stopInMs, 5000));
+        scheduleAutoStop(record, endMs, Math.max(stopInMs, 5000));
 
         scheduleSilenceCheck(record, recorder.getActiveState(), Math.max(stopInMs, 5000));
       }
