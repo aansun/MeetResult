@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const logger = require("../utils/logger");
 
 /**
  * Menyisipkan logo (gambar) ke dalam dokumen .docx secara MANUAL (manipulasi OOXML
@@ -90,7 +91,18 @@ function injectLogo(zip, logoPath) {
     return;
   }
 
-  const imageBuffer = fs.readFileSync(logoPath);
+  let imageBuffer;
+  try {
+    imageBuffer = fs.readFileSync(logoPath);
+  } catch (err) {
+    // Gagal baca file logo (mis. permission/quarantine oleh macOS Gatekeeper untuk
+    // file yang baru diunduh) tidak boleh menggagalkan seluruh notulen - lewati logo
+    // saja, dokumen tetap dihasilkan normal.
+    logger.warn(`Gagal membaca file logo (${logoPath}): ${err.message} - logo dilewati.`);
+    documentXml = documentXml.split(LOGO_TAG).join("");
+    zip.file(documentXmlPath, documentXml);
+    return;
+  }
   const { width, height } = getImageDimensions(imageBuffer, info.ext);
   const aspectRatio = height / width;
 
