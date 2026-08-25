@@ -101,6 +101,8 @@ Step transkripsi (audio→teks) diatur terpisah — lihat [bagian 5](#5-transkri
 | `claude` (default) | Pakai Claude Code CLI (subscription, tanpa API key) atau Anthropic API |
 | `openai` | Pakai endpoint Chat Completions **OpenAI-compatible** — bisa **cloud** (OpenAI) atau **lokal** (oMLX, Ollama, LM Studio, vLLM, dll) |
 | `agy` | Pakai **Antigravity CLI** (Google, akses model Gemini) yang sudah login di mesin — subscription, tanpa API key terpisah |
+| `opencode` | Pakai **OpenCode CLI** (akses banyak model lewat OpenCode Zen/Go) yang sudah login di mesin — NOTULEN SAJA, bukan transkripsi |
+| `ninerouter` | Pakai gateway **9Router** ([github.com/decolua/9router](https://github.com/decolua/9router), lokal/remote, OpenAI-compatible) — satu key, banyak provider, auto-fallback |
 
 > **Auto-deteksi saat install**: `npm install` otomatis mengecek apakah ada server AI lokal aktif — **oMLX** (baca port & API key langsung dari `~/.omlx/settings.json`, jadi otomatis TERMASUK autentikasinya), **Ollama** (`:11434`), atau **LM Studio** (`:1234`). Kalau ketemu, `.env` langsung di-set `SUMMARY_PROVIDER=openai` + `OPENAI_BASE_URL` (+ `OPENAI_API_KEY` untuk oMLX) yang sesuai. Kalau server lokal baru dinyalakan setelah install, jalankan ulang deteksinya kapan saja:
 > ```bash
@@ -214,6 +216,26 @@ MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription
 
 > **PENTING - kenapa OpenCode TIDAK dipakai untuk transkripsi audio**: OpenCode adalah agent coding dengan akses shell, bukan API teks/audio biasa. Diuji langsung: attachment file audio (`-f audio.wav`) gagal dengan error "Cannot read binary file" - dan begitu gagal, model mencoba menjalankan perintah shell sendiri di mesin (mis. `which whisper`, `ffprobe`) untuk mencari cara lain menyelesaikan tugas. Ini aman untuk prompt teks biasa (notulen), tapi TIDAK aman untuk pipeline otomatis yang memproses audio tanpa pengawasan - karena itu OpenCode cuma tersedia sebagai provider **notulen**, tidak muncul di pilihan provider transkripsi.
 
+### Opsi F — `ninerouter` (9Router, gateway multi-provider)
+
+[9Router](https://github.com/decolua/9router) adalah gateway OpenAI-compatible lokal/remote yang mengumpulkan banyak provider AI (OpenAI, Anthropic, Gemini, Groq, dll) di balik **satu URL + satu API key**, dengan auto-fallback antar akun. MeetResult memanggilnya lewat endpoint resmi `/v1/chat/completions`.
+
+1. Jalankan/siapkan instance 9Router-mu (lokal atau remote/tunnel), catat URL-nya (mis. `http://localhost:20128`) dan API key dari Dashboard → Keys (kalau instance-nya mengaktifkan `requireApiKey`).
+2. Cek daftar model chat yang tersedia:
+   ```bash
+   curl $NINEROUTER_URL/v1/models | jq '.data[].id'
+   ```
+3. Di `.env`, atau lewat menu tray **Pengaturan**:
+   ```
+   SUMMARY_PROVIDER=ninerouter
+   NINEROUTER_URL=http://localhost:20128
+   NINEROUTER_API_KEY=...
+   NINEROUTER_MODEL=openai/gpt-5
+   ```
+   Format `NINEROUTER_MODEL` WAJIB `provider/model` (id persis dari `/v1/models`). Di menu tray, tombol ↻ di sebelah field Model mengambil daftar ini otomatis.
+
+> **Penting - "Invalid model format"**: kalau muncul error ini, artinya `NINEROUTER_MODEL` tidak persis sama dengan salah satu `id` di `GET <NINEROUTER_URL>/v1/models` - cek ulang lewat tombol ↻ atau curl di atas, jangan menebak formatnya manual.
+
 ### Provider Backup (Fallback) untuk Notulen
 
 Kalau provider utama gagal (error teknis, kuota habis, dll), MeetResult bisa otomatis mencoba ulang lewat provider backup, supaya notulen tetap berhasil dibuat. Atur lewat menu tray **Pengaturan** ("Provider Fallback") atau `.env`:
@@ -229,15 +251,19 @@ Field Mode/Model provider (Claude, OpenAI, Antigravity) di menu tray Pengaturan 
 
 ## 5. Akurasi Transkripsi: Local (Whisper) vs Cloud (Gemini/OpenAI)
 
-Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Pengaturan** atau langsung di `.env`. Ada 3 pilihan - semua sudah diverifikasi lewat tes nyata di audio yang sama (podcast padat istilah Arab/Islami, lihat tabel di bawah):
+Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Pengaturan** atau langsung di `.env`. Ada 4 pilihan - 3 di antaranya sudah diverifikasi lewat tes nyata di audio yang sama (podcast padat istilah Arab/Islami, lihat tabel di bawah):
 
 | Provider | `TRANSCRIBE_PROVIDER` | Lokasi proses | Butuh internet | Akurasi istilah khusus (hasil tes nyata) |
 |---|---|---|---|---|
 | **Whisper** (default) | `whisper` | Lokal (mesin sendiri) | Tidak | Baik untuk kalimat umum; model `large-v3` (default) memperbaiki sebagian kesalahan istilah khusus dibanding `medium`, tidak semua |
 | **Gemini** | `gemini` | Cloud (Google) | Ya | **Terbaik** - benar 100% untuk semua istilah uji (nama tokoh, istilah Arab) |
-| **OpenAI** | `openai` | Cloud (OpenAI) | Ya | Lebih baik dari Whisper `medium`, tapi masih ada kesalahan di istilah yang sangat spesifik |
+| **OpenAI** | `openai` | Cloud (OpenAI resmi) | Ya | Lebih baik dari Whisper `medium`, tapi masih ada kesalahan di istilah yang sangat spesifik |
+| **Custom (OpenAI-compatible)** | `openai-compatible` | Server milik sendiri (lokal/custom) | Tergantung server | Belum diverifikasi - tergantung model di server tsb |
+| **9Router** | `ninerouter` | Gateway lokal/remote (banyak provider) | Ya | Tergantung provider STT yang dipasang di instance-nya |
 
 **Kapan pakai Cloud (Gemini/OpenAI)**: kalau tidak mau install Whisper secara lokal, mesin lambat/RAM terbatas, atau butuh akurasi maksimal untuk konten dengan istilah/nama khusus (asing, Arab, dsb). **Trade-off**: butuh koneksi internet, dan audio meeting terkirim ke server pihak ketiga (Google/OpenAI) - beda dari Whisper yang 100% lokal.
+
+**Kapan pakai Custom (OpenAI-compatible)**: kalau punya server transkripsi audio sendiri (lokal/self-hosted) yang expose endpoint bentuk OpenAI Audio Transcriptions (`POST /audio/transcriptions`) - mis. hasil deploy sendiri, bukan OpenAI. Provider ini **sengaja dipisah** dari `openai` (OpenAI cloud resmi) di atas supaya konfigurasi keduanya (Base URL/API Key/Model) tidak tertukar - kedua provider ini bahkan bisa aktif bersamaan dengan peran berbeda (mis. `openai` sebagai utama, `openai-compatible` sebagai fallback, atau sebaliknya).
 
 ### Setup Gemini (opsional)
 
@@ -252,6 +278,8 @@ Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Penga
 
 ### Setup OpenAI (opsional)
 
+Provider ini mengirim audio ke server **OpenAI cloud resmi**.
+
 1. Dapatkan API key di https://platform.openai.com/api-keys
 2. Isi lewat menu tray **Pengaturan**, atau langsung di `.env`:
    ```
@@ -259,11 +287,48 @@ Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Penga
    OPENAI_TRANSCRIBE_API_KEY=...
    OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe
    ```
-   > `OPENAI_TRANSCRIBE_API_KEY`/`OPENAI_TRANSCRIBE_BASE_URL` SENGAJA terpisah dari `OPENAI_API_KEY`/`OPENAI_BASE_URL` yang dipakai untuk notulen (`SUMMARY_PROVIDER=openai`) - base URL notulen sering diarahkan ke server LOKAL (oMLX/Ollama) yang tidak punya endpoint audio.
+   > `OPENAI_TRANSCRIBE_API_KEY`/`OPENAI_TRANSCRIBE_BASE_URL` SENGAJA terpisah dari `OPENAI_API_KEY`/`OPENAI_BASE_URL` yang dipakai untuk notulen (`SUMMARY_PROVIDER=openai`) - base URL notulen sering diarahkan ke server LOKAL (oMLX/Ollama/LM Studio) yang tidak punya endpoint audio, sedangkan base URL transkripsi ini defaultnya OpenAI cloud asli dan jarang perlu diubah.
 
 Setelah diisi, jalankan `meetresult transcribe <file.wav>` untuk tes, atau tombol **Test** di Pengaturan.
 
 > Provider transkripsi ini terpisah dari provider notulen (`SUMMARY_PROVIDER`) - kamu bisa campur, misalnya transkripsi pakai Gemini tapi notulen tetap pakai Claude, atau sebaliknya.
+
+### Setup Custom OpenAI-compatible (opsional)
+
+Untuk server transkripsi **milik sendiri** (lokal/self-hosted, bukan OpenAI) yang expose endpoint bentuk OpenAI Audio Transcriptions (`POST /audio/transcriptions`). **Sengaja provider terpisah** dari `openai` di atas - jadi Base URL/API Key/Model keduanya tidak pernah tertukar, dan kamu bisa pakai kedua provider ini sekaligus (mis. satu jadi utama, satu jadi fallback).
+
+1. Isi lewat menu tray **Pengaturan**, atau langsung di `.env`:
+   ```
+   TRANSCRIBE_PROVIDER=openai-compatible
+   OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL=http://localhost:8000/v1
+   OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY=
+   OPENAI_COMPATIBLE_TRANSCRIBE_MODEL=
+   ```
+   `OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL` **wajib diisi manual** (tidak ada default) - tidak ada asumsi server mana yang dituju. `OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY` boleh dikosongkan kalau server tidak butuh autentikasi, dan `OPENAI_COMPATIBLE_TRANSCRIBE_MODEL` boleh dikosongkan kalau servernya cuma punya 1 model dan mengabaikan parameter ini.
+
+Di menu tray **Pengaturan**, tombol ↻ di sebelah field Model akan mengambil daftar model langsung dari `<Base URL>/models` endpoint yang sedang diisi (setara `meetresult models --scope transcribe` di CLI) - berguna untuk cek endpoint custom benar-benar aktif dan lihat ID model yang tersedia di sana.
+
+Setelah diisi, jalankan `meetresult transcribe <file.wav>` untuk tes, atau tombol **Test** di Pengaturan.
+
+### Setup 9Router untuk Transkripsi (opsional)
+
+[9Router](https://github.com/decolua/9router) juga punya endpoint speech-to-text (`POST /v1/audio/transcriptions`), lewat provider akun Whisper/Groq/Gemini/Deepgram/AssemblyAI/NVIDIA/HuggingFace yang terpasang di instance-mu. **Sengaja provider terpisah** dari `ninerouter` untuk notulen (lihat [Opsi F](#opsi-f--ninerouter-9router-gateway-multi-provider) di atas) - URL/API key/model kedua peran ini tidak pernah tertukar, walau sama-sama 9Router.
+
+1. Cek daftar model **khusus speech-to-text** (BEDA dari daftar model chat `/v1/models` di atas):
+   ```bash
+   curl $NINEROUTER_URL/v1/models/stt | jq '.data[].id'
+   ```
+   > Kalau daftar ini KOSONG, artinya instance 9Router-mu belum punya akun provider STT terpasang sama sekali - tambahkan dulu di Dashboard 9Router (mis. akun OpenAI/Groq untuk Whisper) sebelum lanjut, apa pun model yang kamu coba kirim akan ditolak selama daftar ini kosong.
+2. Di `.env`, atau lewat menu tray **Pengaturan**:
+   ```
+   TRANSCRIBE_PROVIDER=ninerouter
+   NINEROUTER_TRANSCRIBE_URL=http://localhost:20128
+   NINEROUTER_TRANSCRIBE_API_KEY=...
+   NINEROUTER_TRANSCRIBE_MODEL=openai/whisper-1
+   ```
+   Format `NINEROUTER_TRANSCRIBE_MODEL` WAJIB `provider/model`, id persis dari `/v1/models/stt` (BUKAN dari `/v1/models` biasa). Di menu tray, tombol ↻ di sebelah field Model mengambil daftar ini otomatis.
+
+Setelah diisi, jalankan `meetresult transcribe <file.wav>` untuk tes, atau tombol **Test** di Pengaturan.
 
 ### Bantu Whisper mengenali istilah/nama khusus (kalau tetap pakai lokal)
 

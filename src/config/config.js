@@ -49,6 +49,8 @@ module.exports = {
     //   ke binary resmi yang sudah user install & login sendiri, bukan reverse-engineer OAuth.
     // "opencode": pakai OpenCode CLI (akses banyak model - Claude/GPT/Gemini/dll lewat OpenCode
     //   Zen/Go) yang sudah login di mesin ini, lihat `opencode.*` di bawah.
+    // "ninerouter": pakai gateway 9Router (https://github.com/decolua/9router, lokal/remote,
+    //   OpenAI-compatible) lewat /v1/chat/completions, lihat `ninerouter.*` di bawah.
     provider: (process.env.SUMMARY_PROVIDER || "claude").toLowerCase(),
     // Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - kosongkan
     // untuk nonaktifkan fallback. Kalau diisi (mis. "claude") dan berbeda dari provider utama,
@@ -83,6 +85,21 @@ module.exports = {
     model: process.env.OPENCODE_MODEL || "",
   },
 
+  // --- 9Router (https://github.com/decolua/9router, khusus SUMMARY_PROVIDER=ninerouter) -
+  // gateway OpenAI-compatible lokal/remote untuk banyak provider AI sekaligus (Chat Completions
+  // lewat /v1/chat/completions). TERPISAH dari `ninerouterTranscribe` di bawah (dipakai
+  // TRANSCRIBE_PROVIDER=ninerouter) - walau sama-sama 9Router, kedua peran ini punya
+  // URL/API key/model SENDIRI-SENDIRI, mengikuti pola provider lain di app ini (mis. openai
+  // vs openai-compatible) supaya konfigurasi kedua peran tidak tertukar.
+  ninerouter: {
+    url: process.env.NINEROUTER_URL || "",
+    // Boleh kosong kalau instance 9Router-nya tidak mengaktifkan requireApiKey.
+    apiKey: process.env.NINEROUTER_API_KEY || "",
+    // Format WAJIB "provider/model", mis. "openai/gpt-5" atau "cc/claude-opus-4-7" - cek
+    // pilihan lewat GET <NINEROUTER_URL>/v1/models.
+    model: process.env.NINEROUTER_MODEL || "",
+  },
+
   openai: {
     // Base URL OpenAI-compatible - default ke OpenAI cloud, tapi bisa diarahkan ke server LOKAL
     // yang expose endpoint yang sama, mis. Ollama (http://localhost:11434/v1), MLX/mlx-omni-server
@@ -105,6 +122,31 @@ module.exports = {
     transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-transcribe",
   },
 
+  // --- Custom OpenAI-compatible transkripsi (khusus TRANSCRIBE_PROVIDER=openai-compatible) ---
+  // TERPISAH dari `openai.transcribeBaseURL/transcribeApiKey/transcribeModel` di atas (OpenAI
+  // cloud RESMI) supaya konfigurasi keduanya tidak tertukar - provider ini untuk server audio
+  // transkripsi CUSTOM/LOKAL yang cuma KOMPATIBEL dengan bentuk API OpenAI Audio Transcriptions
+  // (POST /audio/transcriptions), bukan OpenAI asli. Tidak ada default base URL (harus diisi
+  // manual) karena tidak ada asumsi server mana yang dituju.
+  openaiCompatibleTranscribe: {
+    baseURL: process.env.OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL || "",
+    // Boleh kosong kalau server custom tidak butuh autentikasi.
+    apiKey: process.env.OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY || "",
+    model: process.env.OPENAI_COMPATIBLE_TRANSCRIBE_MODEL || "",
+  },
+
+  // --- 9Router untuk transkripsi (khusus TRANSCRIBE_PROVIDER=ninerouter) - TERPISAH dari
+  // `ninerouter` di atas (dipakai NOTULEN) walau sama-sama 9Router, supaya URL/API key/model
+  // kedua peran tidak tertukar (pola sama seperti openai vs openai-compatible).
+  ninerouterTranscribe: {
+    url: process.env.NINEROUTER_TRANSCRIBE_URL || "",
+    apiKey: process.env.NINEROUTER_TRANSCRIBE_API_KEY || "",
+    // Format WAJIB "provider/model", mis. "openai/whisper-1" atau "groq/whisper-large-v3" - cek
+    // pilihan lewat GET <NINEROUTER_TRANSCRIBE_URL>/v1/models/stt (BUKAN /v1/models biasa -
+    // 9Router punya daftar model TERPISAH khusus speech-to-text, beda dari daftar model chat).
+    model: process.env.NINEROUTER_TRANSCRIBE_MODEL || "",
+  },
+
   // --- Gemini API native (khusus TRANSCRIBE_PROVIDER=gemini) ---
   // Beda dari config `openai` di atas: ini API Gemini ASLI (bukan lewat shim OpenAI-compatible),
   // dipakai untuk transkripsi audio karena Gemini bisa terima file audio langsung, sedangkan
@@ -113,12 +155,21 @@ module.exports = {
     apiKey: process.env.GEMINI_API_KEY || "",
     // WAJIB diisi manual - cek nama model audio-capable terbaru di https://aistudio.google.com
     model: process.env.GEMINI_MODEL || "",
+    // Gemini free/paid tier punya limit request per menit (mis. 15 req/menit di beberapa tier) -
+    // kalau transkripsi kena limit, coba lagi setelah jeda ini (BUKAN retry agresif langsung
+    // beruntun) sebelum benar-benar menyerah ke provider fallback.
+    maxRetries: Number(process.env.GEMINI_TRANSCRIBE_MAX_RETRIES || 3),
+    retryDelayMs: Number(process.env.GEMINI_TRANSCRIBE_RETRY_DELAY_MS || 60000),
   },
 
   transcribe: {
     // "whisper" (default, lokal/offline/gratis, lihat `whisper.*`), "gemini" (cloud, butuh
-    // GEMINI_API_KEY, lihat `gemini.*`), atau "openai" (cloud, butuh OPENAI_API_KEY, lihat
-    // `openai.*` - endpoint Audio Transcriptions, model default whisper-1)
+    // GEMINI_API_KEY, lihat `gemini.*`), "openai" (cloud OpenAI RESMI, butuh
+    // OPENAI_TRANSCRIBE_API_KEY/OPENAI_API_KEY, lihat `openai.*`), "openai-compatible"
+    // (server CUSTOM/LOKAL yang kompatibel dengan API OpenAI Audio Transcriptions, lihat
+    // `openaiCompatibleTranscribe.*` - TERPISAH dari "openai" supaya tidak tertukar konfigurasi),
+    // atau "ninerouter" (gateway 9Router, lewat /v1/audio/transcriptions, model dari daftar
+    // KHUSUS speech-to-text /v1/models/stt - lihat `ninerouterTranscribe.*`)
     provider: (process.env.TRANSCRIBE_PROVIDER || "whisper").toLowerCase(),
     // Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - kosongkan
     // untuk nonaktifkan fallback. Rekomendasi: isi "whisper" (lokal, tidak pernah kehabisan

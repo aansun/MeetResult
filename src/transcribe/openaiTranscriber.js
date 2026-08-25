@@ -13,10 +13,15 @@ function mimeTypeFor(filePath) {
 }
 
 /**
- * Transkrip file audio pakai OpenAI Audio Transcriptions API (mis. model whisper-1 /
+ * Transkrip file audio pakai OpenAI Audio Transcriptions API RESMI (mis. model whisper-1 /
  * gpt-4o-transcribe) - alternatif cloud selain Gemini. Sengaja pakai baseURL/API key
  * TERPISAH dari config `openai.*` yang dipakai SUMMARY_PROVIDER=openai (notulen/teks),
  * karena baseURL notulen sering diarahkan ke server LOKAL yang tidak punya endpoint audio.
+ *
+ * Untuk server transkripsi CUSTOM/LOKAL yang cuma KOMPATIBEL dengan bentuk API ini (bukan
+ * OpenAI asli), gunakan provider terpisah "openai-compatible"
+ * (lihat openaiCompatibleTranscriber.js) - sengaja tidak digabung ke sini supaya konfigurasi
+ * (base URL/API key/model) keduanya tidak tertukar.
  */
 async function transcribeWithOpenAi(audioFilePath) {
   if (!config.openai.transcribeApiKey) {
@@ -34,7 +39,7 @@ async function transcribeWithOpenAi(audioFilePath) {
   form.append("language", "id");
   form.append("response_format", "text");
 
-  const base = config.openai.transcribeBaseURL.replace(/\/$/, "");
+  const base = config.openai.transcribeBaseURL.replace(/\/+$/, "");
   const res = await fetch(`${base}/audio/transcriptions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${config.openai.transcribeApiKey}` },

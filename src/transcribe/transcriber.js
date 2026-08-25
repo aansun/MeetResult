@@ -6,6 +6,8 @@ const logger = require("../utils/logger");
 const { monthSubdir } = require("../utils/filename");
 const { transcribeWithGemini } = require("./geminiTranscriber");
 const { transcribeWithOpenAi } = require("./openaiTranscriber");
+const { transcribeWithOpenAiCompatible } = require("./openaiCompatibleTranscriber");
+const { transcribeWithNinerouter } = require("./ninerouterTranscriber");
 
 /**
  * Menjalankan Whisper untuk mentranskrip file audio hasil rekaman menjadi teks Bahasa Indonesia.
@@ -119,13 +121,20 @@ async function transcribeWithProvider(providerName, audioFilePath, outDir, whisp
   if (providerName === "openai") {
     return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithOpenAi);
   }
+  if (providerName === "openai-compatible") {
+    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithOpenAiCompatible);
+  }
+  if (providerName === "ninerouter") {
+    return transcribeWithCloudToFile(audioFilePath, outDir, transcribeWithNinerouter);
+  }
   return transcribeWithWhisper(audioFilePath, outDir, whisperModelOverride);
 }
 
 /**
  * Transkrip file audio jadi teks - dispatch ke Whisper (default, lokal/offline), Gemini
- * (TRANSCRIBE_PROVIDER=gemini, cloud, butuh GEMINI_API_KEY), atau OpenAI (TRANSCRIBE_PROVIDER=
- * openai, cloud, butuh OPENAI_API_KEY, endpoint Audio Transcriptions).
+ * (TRANSCRIBE_PROVIDER=gemini, cloud, butuh GEMINI_API_KEY), OpenAI (TRANSCRIBE_PROVIDER=
+ * openai, cloud RESMI, butuh OPENAI_API_KEY, endpoint Audio Transcriptions), atau server
+ * custom/lokal yang KOMPATIBEL dengan API tsb (TRANSCRIBE_PROVIDER=openai-compatible).
  *
  * Kalau provider utama gagal (error teknis, kuota habis, dll) DAN TRANSCRIBE_FALLBACK_PROVIDER
  * diisi, otomatis dicoba ulang lewat provider fallback tersebut - rekomendasi: pakai "whisper"

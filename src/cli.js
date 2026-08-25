@@ -31,10 +31,56 @@ function applyModelOverride(model) {
     config.agy.model = model;
   } else if (config.ai.provider === "opencode") {
     config.opencode.model = model;
+  } else if (config.ai.provider === "ninerouter") {
+    config.ninerouter.model = model;
   } else if (config.claude.mode === "api") {
     config.claude.model = model;
   } else {
     config.claude.cliModel = model;
+  }
+}
+
+function applyTranscribeModelOverride(model) {
+  if (!model) return;
+  if (config.transcribe.provider === "openai") {
+    config.openai.transcribeModel = model;
+  } else if (config.transcribe.provider === "openai-compatible") {
+    config.openaiCompatibleTranscribe.model = model;
+  } else if (config.transcribe.provider === "ninerouter") {
+    config.ninerouterTranscribe.model = model;
+  } else if (config.transcribe.provider === "gemini") {
+    config.gemini.model = model;
+  } else {
+    config.whisper.model = model;
+  }
+}
+
+/**
+ * Ambil & tampilkan daftar model dari endpoint OpenAI-compatible mana pun via GET
+ * <baseURL><modelsPath> - dipakai bareng oleh command `models` untuk scope "summary" (provider
+ * notulen openai/ninerouter, modelsPath default "/models") dan "transcribe" (provider
+ * openai/openai-compatible/ninerouter - ninerouter pakai modelsPath "/models/stt" karena
+ * 9Router punya daftar model TERPISAH khusus speech-to-text), supaya logika fetch+format-nya
+ * tidak triplikat berkali-kali.
+ */
+async function printModelList(baseURL, apiKey, activeModel, modelsPath = "/models") {
+  const axios = require("axios");
+  const base = (baseURL || "").replace(/\/+$/, "");
+  const headers = {};
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  try {
+    const { data } = await axios.get(`${base}${modelsPath}`, { headers });
+    const ids = (data.data || []).map((m) => m.id).sort();
+    if (ids.length === 0) {
+      logger.info("Tidak ada model terdaftar di endpoint ini.");
+    } else {
+      ids.forEach((id) =>
+        console.log(`  ${id === activeModel ? chalk.green("● " + id + "  (aktif)") : "  " + id}`)
+      );
+    }
+    logger.info(`Endpoint: ${base}${modelsPath}`);
+  } catch (err) {
+    logger.error(`Gagal ambil daftar model dari ${base}${modelsPath}: ${err.message}`);
   }
 }
 
@@ -43,7 +89,7 @@ program
   .description(
     "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis, Bahasa Indonesia."
   )
-  .version("1.10.3");
+  .version("1.10.4");
 
 program
   .command("login")
@@ -197,30 +243,63 @@ program
 
 program
   .command("models")
-  .description("Tampilkan daftar model yang tersedia untuk provider AI notulen yang aktif")
-  .action(async () => {
+  .description("Tampilkan daftar model untuk provider notulen atau transkripsi yang aktif")
+  .option("--scope <scope>", "Scope model: summary atau transcribe", "summary")
+  .action(async (opts) => {
+    if (opts.scope === "transcribe") {
+      logger.title(`MODEL TRANSKRIPSI (provider: ${config.transcribe.provider})`);
+      if (config.transcribe.provider === "openai") {
+        await printModelList(config.openai.transcribeBaseURL, config.openai.transcribeApiKey, config.openai.transcribeModel);
+      } else if (config.transcribe.provider === "openai-compatible") {
+        if (!config.openaiCompatibleTranscribe.baseURL) {
+          logger.error("OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL belum diisi di .env.");
+          process.exitCode = 1;
+          return;
+        }
+        await printModelList(
+          config.openaiCompatibleTranscribe.baseURL,
+          config.openaiCompatibleTranscribe.apiKey,
+          config.openaiCompatibleTranscribe.model
+        );
+      } else if (config.transcribe.provider === "ninerouter") {
+        if (!config.ninerouterTranscribe.url) {
+          logger.error("NINEROUTER_TRANSCRIBE_URL belum diisi di .env.");
+          process.exitCode = 1;
+          return;
+        }
+        // 9Router punya daftar model TERPISAH khusus speech-to-text (/v1/models/stt) - BUKAN
+        // daftar model chat biasa (/v1/models).
+        await printModelList(
+          `${config.ninerouterTranscribe.url}/v1`,
+          config.ninerouterTranscribe.apiKey,
+          config.ninerouterTranscribe.model,
+          "/models/stt"
+        );
+      } else {
+        logger.info("Daftar model endpoint hanya tersedia untuk provider transkripsi openai / openai-compatible / ninerouter.");
+      }
+      return;
+    }
+    if (opts.scope !== "summary") {
+      logger.error("Scope tidak valid. Gunakan 'summary' atau 'transcribe'.");
+      process.exitCode = 1;
+      return;
+    }
+
     logger.title(`MODEL TERSEDIA (provider: ${config.ai.provider})`);
 
     if (config.ai.provider === "openai") {
-      const axios = require("axios");
-      const baseURL = (config.openai.baseURL || "https://api.openai.com/v1").replace(/\/+$/, "");
-      const headers = {};
-      if (config.openai.apiKey) headers.Authorization = `Bearer ${config.openai.apiKey}`;
+      await printModelList(config.openai.baseURL, config.openai.apiKey, config.openai.model);
+      return;
+    }
 
-      try {
-        const { data } = await axios.get(`${baseURL}/models`, { headers });
-        const ids = (data.data || []).map((m) => m.id).sort();
-        if (ids.length === 0) {
-          logger.info("Tidak ada model terdaftar di endpoint ini.");
-        } else {
-          ids.forEach((id) =>
-            console.log(`  ${id === config.openai.model ? chalk.green("● " + id + "  (aktif)") : "  " + id}`)
-          );
-        }
-        logger.info(`Endpoint: ${baseURL}/models`);
-      } catch (err) {
-        logger.error(`Gagal ambil daftar model dari ${baseURL}: ${err.message}`);
+    if (config.ai.provider === "ninerouter") {
+      if (!config.ninerouter.url) {
+        logger.error("NINEROUTER_URL belum diisi di .env.");
+        process.exitCode = 1;
+        return;
       }
+      await printModelList(`${config.ninerouter.url}/v1`, config.ninerouter.apiKey, config.ninerouter.model);
       return;
     }
 
@@ -432,9 +511,11 @@ program
 
 program
   .command("transcribe <fileAudio>")
-  .description("Transkrip manual sebuah file audio (Whisper, Bahasa Indonesia)")
-  .action(async (fileAudio) => {
+  .description("Transkrip manual file audio menggunakan provider transkripsi aktif")
+  .option("--model <model>", "Override model transkripsi untuk sekali proses ini saja")
+  .action(async (fileAudio, opts) => {
     try {
+      applyTranscribeModelOverride(opts.model);
       const filePath = path.resolve(fileAudio);
       const out = await transcribeAudio(filePath);
       logger.success(`Selesai: ${out}`);
@@ -476,9 +557,11 @@ program
   .description("Jalankan pipeline lengkap: audio -> transkrip -> notulen")
   .option("-t, --title <judul>", "Judul rapat", "Meeting")
   .option("--model <model>", "Override model AI untuk sekali proses ini saja (tidak mengubah .env)")
+  .option("--transcribe-model <model>", "Override model transkripsi untuk sekali proses ini saja")
   .action(async (fileAudio, opts) => {
     try {
       applyModelOverride(opts.model);
+      applyTranscribeModelOverride(opts.transcribeModel);
       const filePath = path.resolve(fileAudio);
       const id = `adhoc-${Date.now()}`;
       const record = db.addMeeting({

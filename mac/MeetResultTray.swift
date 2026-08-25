@@ -832,6 +832,12 @@ class SettingsWindowController: NSWindowController {
     let refreshAgyModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let opencodeModelField = NSComboBox()
     let refreshOpencodeModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
+    // --- 9Router untuk NOTULEN (SUMMARY_PROVIDER=ninerouter) - field TERPISAH dari
+    // ninerouterTranscribe* di bawah (dipakai peran Transkripsi) walau sama-sama 9Router.
+    let ninerouterURLField = NSTextField(string: "")
+    let ninerouterApiKeyField = NSSecureTextField(string: "")
+    let ninerouterModelField = NSComboBox()
+    let refreshNinerouterModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let testButton = NSButton(title: "Test", target: nil, action: nil)
 
     // --- Navigasi sidebar (kiri) + panel detail (kanan), pola macOS System Settings ---
@@ -862,9 +868,23 @@ class SettingsWindowController: NSWindowController {
     let whisperFallbackStatusLabel = NSTextField(labelWithString: "")
     let whisperFallbackActionButton = NSButton(title: "Cek Status", target: nil, action: nil)
     let geminiApiKeyField = NSSecureTextField(string: "")
-    let geminiModelField = NSTextField(string: "")
+    let geminiModelField = NSComboBox()
+    let refreshGeminiModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let openaiTranscribeApiKeyField = NSSecureTextField(string: "")
     let openaiTranscribeModelField = NSComboBox()
+    // --- Custom OpenAI-compatible (TRANSCRIBE_PROVIDER=openai-compatible) - field TERPISAH
+    // dari openaiTranscribe* di atas (OpenAI cloud RESMI) supaya tidak tertukar konfigurasinya.
+    let openaiCompatibleTranscribeBaseURLField = NSTextField(string: "")
+    let openaiCompatibleTranscribeApiKeyField = NSSecureTextField(string: "")
+    let openaiCompatibleTranscribeModelField = NSComboBox()
+    let refreshOpenAICompatibleTranscribeModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
+    // --- 9Router untuk TRANSKRIPSI (TRANSCRIBE_PROVIDER=ninerouter) - field TERPISAH dari
+    // ninerouterURLField dkk di atas (dipakai peran Notulen) walau sama-sama 9Router, karena
+    // 9Router punya daftar model TERPISAH untuk chat vs speech-to-text.
+    let ninerouterTranscribeURLField = NSTextField(string: "")
+    let ninerouterTranscribeApiKeyField = NSSecureTextField(string: "")
+    let ninerouterTranscribeModelField = NSComboBox()
+    let refreshNinerouterTranscribeModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
 
     // Baris field per provider - dibuat sekali di buildUI(), lalu DIPINDAHKAN antar grup
     // Provider/Fallback sesuai peran provider tersebut (lihat rebuild*Groups()). Karena
@@ -882,6 +902,9 @@ class SettingsWindowController: NSWindowController {
     var openaiModelRow: NSStackView!
     var agyModelRow: NSStackView!
     var opencodeModelRow: NSStackView!
+    var ninerouterUrlRow: NSStackView!
+    var ninerouterKeyRow: NSStackView!
+    var ninerouterModelRow: NSStackView!
 
     var transcribeProviderRow: NSStackView!
     var transcribeFallbackRow: NSStackView!
@@ -893,6 +916,12 @@ class SettingsWindowController: NSWindowController {
     var geminiModelRow: NSStackView!
     var openaiTranscribeKeyRow: NSStackView!
     var openaiTranscribeModelRow: NSStackView!
+    var openaiCompatibleTranscribeBaseRow: NSStackView!
+    var openaiCompatibleTranscribeKeyRow: NSStackView!
+    var openaiCompatibleTranscribeModelRow: NSStackView!
+    var ninerouterTranscribeUrlRow: NSStackView!
+    var ninerouterTranscribeKeyRow: NSStackView!
+    var ninerouterTranscribeModelRow: NSStackView!
     var notulenStack: NSStackView!
     var transkripsiStack: NSStackView!
     var notulenAiStack: NSStackView!
@@ -1003,14 +1032,14 @@ class SettingsWindowController: NSWindowController {
 
     func buildUI() {
         templatePopup.addItems(withTitles: ["structured", "meeting_minutes"])
-        providerPopup.addItems(withTitles: ["claude", "openai", "agy", "opencode"])
+        providerPopup.addItems(withTitles: ["claude", "openai", "agy", "opencode", "ninerouter"])
         claudeModePopup.addItems(withTitles: ["cli", "api"])
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
         claudeModePopup.target = self
         claudeModePopup.action = #selector(claudeModeChanged)
 
-        summaryFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "claude", "openai", "agy", "opencode"])
+        summaryFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "claude", "openai", "agy", "opencode", "ninerouter"])
         summaryFallbackPopup.toolTip = "Provider backup kalau provider utama gagal (error teknis, kuota habis, dll)"
         summaryFallbackPopup.target = self
         summaryFallbackPopup.action = #selector(summaryFallbackChanged)
@@ -1050,12 +1079,23 @@ class SettingsWindowController: NSWindowController {
         opencodeModelField.placeholderString = "format provider/model, mis. opencode/gemini-3.7-flash"
         opencodeModelRow = row("Model:", opencodeModelField, trailing: refreshOpencodeModelsButton)
 
-        // --- Transkripsi: Local (Whisper) / Cloud (Gemini) / Cloud (OpenAI) ---
-        transcribeProviderPopup.addItems(withTitles: ["whisper", "gemini", "openai"])
+        // 9Router (notulen) - gateway lokal/remote, jadi tidak ada default URL/model.
+        ninerouterURLField.placeholderString = "contoh: http://localhost:20128"
+        ninerouterApiKeyField.placeholderString = "opsional kalau requireApiKey dinonaktifkan"
+        ninerouterModelField.placeholderString = "ambil daftar lewat ↻, format provider/model mis. openai/gpt-5"
+        refreshNinerouterModelsButton.target = self
+        refreshNinerouterModelsButton.action = #selector(refreshNinerouterModels)
+        refreshNinerouterModelsButton.toolTip = "Ambil daftar model dari <URL>/v1/models (Base URL wajib diisi)"
+        ninerouterUrlRow = row("URL:", ninerouterURLField)
+        ninerouterKeyRow = row("API Key:", ninerouterApiKeyField)
+        ninerouterModelRow = row("Model:", ninerouterModelField, trailing: refreshNinerouterModelsButton)
+
+        // --- Transkripsi: Local (Whisper) / Cloud (Gemini) / Cloud (OpenAI) / Custom (openai-compatible) ---
+        transcribeProviderPopup.addItems(withTitles: ["whisper", "gemini", "openai", "openai-compatible", "ninerouter"])
         transcribeProviderPopup.target = self
         transcribeProviderPopup.action = #selector(transcribeProviderChanged)
 
-        transcribeFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "whisper", "gemini", "openai"])
+        transcribeFallbackPopup.addItems(withTitles: [fallbackDisabledLabel, "whisper", "gemini", "openai", "openai-compatible", "ninerouter"])
         transcribeFallbackPopup.toolTip = "Provider backup kalau provider utama gagal (error teknis, kuota habis, dll) - rekomendasi: whisper"
         transcribeFallbackPopup.target = self
         transcribeFallbackPopup.action = #selector(transcribeFallbackChanged)
@@ -1090,14 +1130,43 @@ class SettingsWindowController: NSWindowController {
         whisperFallbackStatusRow = NSStackView(views: [NSView(), whisperFallbackStatusLabel])
         whisperFallbackStatusRow.orientation = .horizontal
 
-        geminiModelField.placeholderString = "cek nama model audio-capable terbaru di Google AI Studio"
+        geminiModelField.placeholderString = "ambil daftar lewat ↻ (butuh API Key), pilih yang audio-capable"
+        refreshGeminiModelsButton.target = self
+        refreshGeminiModelsButton.action = #selector(refreshGeminiModels)
+        refreshGeminiModelsButton.toolTip = "Ambil daftar model dari Gemini ListModels API (API Key wajib diisi)"
         openaiTranscribeApiKeyField.placeholderString = "kosongkan untuk pakai OPENAI_API_KEY"
         geminiKeyRow = row("API Key:", geminiApiKeyField)
-        geminiModelRow = row("Model:", geminiModelField)
+        geminiModelRow = row("Model:", geminiModelField, trailing: refreshGeminiModelsButton)
 
         openaiTranscribeModelField.addItems(withObjectValues: knownOpenAiTranscribeModels)
         openaiTranscribeKeyRow = row("API Key:", openaiTranscribeApiKeyField)
         openaiTranscribeModelRow = row("Model:", openaiTranscribeModelField)
+
+        // Custom OpenAI-compatible - server LOKAL/CUSTOM milik sendiri, jadi tidak ada default
+        // Base URL (beda dari "openai" di atas yang defaultnya OpenAI cloud resmi) dan model
+        // combo-nya kosong (bukan daftar model OpenAI, tapi model apa pun milik server itu).
+        openaiCompatibleTranscribeBaseURLField.placeholderString = "contoh: http://localhost:8000/v1"
+        openaiCompatibleTranscribeApiKeyField.placeholderString = "opsional untuk endpoint tanpa autentikasi"
+        openaiCompatibleTranscribeModelField.placeholderString = "ambil daftar lewat ↻, atau ketik ID model manual"
+        refreshOpenAICompatibleTranscribeModelsButton.target = self
+        refreshOpenAICompatibleTranscribeModelsButton.action = #selector(refreshOpenAICompatibleTranscribeModels)
+        refreshOpenAICompatibleTranscribeModelsButton.toolTip = "Ambil daftar model dari endpoint custom (Base URL wajib diisi)"
+        openaiCompatibleTranscribeBaseRow = row("Base URL:", openaiCompatibleTranscribeBaseURLField)
+        openaiCompatibleTranscribeKeyRow = row("API Key:", openaiCompatibleTranscribeApiKeyField)
+        openaiCompatibleTranscribeModelRow = row("Model:", openaiCompatibleTranscribeModelField, trailing: refreshOpenAICompatibleTranscribeModelsButton)
+
+        // 9Router (transkripsi) - field TERPISAH dari ninerouterURLField dkk di atas (notulen).
+        // Model-nya dari daftar KHUSUS speech-to-text 9Router (/v1/models/stt), bukan daftar
+        // model chat biasa - combo-nya sengaja kosong (bukan daftar model OpenAI).
+        ninerouterTranscribeURLField.placeholderString = "contoh: http://localhost:20128"
+        ninerouterTranscribeApiKeyField.placeholderString = "opsional kalau requireApiKey dinonaktifkan"
+        ninerouterTranscribeModelField.placeholderString = "ambil daftar lewat ↻, format provider/model mis. openai/whisper-1"
+        refreshNinerouterTranscribeModelsButton.target = self
+        refreshNinerouterTranscribeModelsButton.action = #selector(refreshNinerouterTranscribeModels)
+        refreshNinerouterTranscribeModelsButton.toolTip = "Ambil daftar model dari <URL>/v1/models/stt (Base URL wajib diisi)"
+        ninerouterTranscribeUrlRow = row("URL:", ninerouterTranscribeURLField)
+        ninerouterTranscribeKeyRow = row("API Key:", ninerouterTranscribeApiKeyField)
+        ninerouterTranscribeModelRow = row("Model:", ninerouterTranscribeModelField, trailing: refreshNinerouterTranscribeModelsButton)
 
         testButton.target = self
         testButton.action = #selector(testCurrentModel)
@@ -1219,6 +1288,13 @@ class SettingsWindowController: NSWindowController {
         guard let windowStack = windowStack else { return }
         window?.layoutIfNeeded()
         window?.setContentSize(windowStack.fittingSize)
+        // setContentSize() pada window NON-resizable (lihat styleMask di init) kadang tidak
+        // memicu repaint penuh area yang baru ter-expose/bergeser (mis. sidebar kiri tampak
+        // hilang padahal frame & hierarchy-nya benar - dikonfirmasi lewat MEETRESULT_DEBUG_LAYOUT)
+        // - paksa layout+redraw penuh supaya tidak ada area basi yang belum di-repaint.
+        window?.contentView?.needsLayout = true
+        window?.contentView?.needsDisplay = true
+        window?.displayIfNeeded()
     }
 
     @objc func providerChanged() {
@@ -1253,6 +1329,8 @@ class SettingsWindowController: NSWindowController {
             return [providerSelector, agyModelRow]
         case "opencode":
             return [providerSelector, opencodeModelRow]
+        case "ninerouter":
+            return [providerSelector, ninerouterUrlRow, ninerouterKeyRow, ninerouterModelRow]
         default: // fallbackDisabledLabel
             return [providerSelector]
         }
@@ -1274,6 +1352,10 @@ class SettingsWindowController: NSWindowController {
             return [providerSelector, geminiKeyRow, geminiModelRow]
         case "openai":
             return [providerSelector, openaiTranscribeKeyRow, openaiTranscribeModelRow]
+        case "openai-compatible":
+            return [providerSelector, openaiCompatibleTranscribeBaseRow, openaiCompatibleTranscribeKeyRow, openaiCompatibleTranscribeModelRow]
+        case "ninerouter":
+            return [providerSelector, ninerouterTranscribeUrlRow, ninerouterTranscribeKeyRow, ninerouterTranscribeModelRow]
         default: // fallbackDisabledLabel
             return [providerSelector]
         }
@@ -1596,6 +1678,64 @@ class SettingsWindowController: NSWindowController {
         resizeToFitContent()
     }
 
+    /// Ambil daftar model dari Gemini ListModels API resmi (GET /v1beta/models?key=...) - beda
+    /// dari provider OpenAI-compatible lain, Gemini butuh API Key di QUERY STRING (bukan header
+    /// Authorization) dan nama model di response berbentuk "models/gemini-2.5-flash" (prefix
+    /// "models/" DIHAPUS di sini karena geminiTranscriber.js makai nama model TANPA prefix itu).
+    /// List ini TIDAK difilter khusus audio-capable (API-nya tidak expose flag itu) - filter
+    /// manual "generateContent" saja untuk buang model non-chat (mis. embedding-only).
+    @objc func refreshGeminiModels() {
+        let apiKey = geminiApiKeyField.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !apiKey.isEmpty else {
+            appDelegate?.showAlert(title: "API Key belum diisi", message: "Isi dulu API Key Gemini untuk mengambil daftar model.")
+            return
+        }
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models?key=\(apiKey)") else {
+            appDelegate?.showAlert(title: "URL tidak valid", message: "Gagal membentuk URL Gemini ListModels.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+
+        refreshGeminiModelsButton.isEnabled = false
+        refreshGeminiModelsButton.title = "\u{22EF}"
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshGeminiModelsButton.isEnabled = true
+                self.refreshGeminiModelsButton.title = "\u{21BB}"
+
+                guard let data = data, error == nil,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let list = json["models"] as? [[String: Any]] else {
+                    let apiMessage = (try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: Any])
+                        .flatMap { ($0?["error"] as? [String: Any])?["message"] as? String }
+                    self.appDelegate?.showAlert(
+                        title: "Gagal ambil daftar model",
+                        message: apiMessage ?? error?.localizedDescription ?? "Response dari server tidak sesuai format yang diharapkan."
+                    )
+                    return
+                }
+
+                let ids = list
+                    .filter { ($0["supportedGenerationMethods"] as? [String])?.contains("generateContent") ?? false }
+                    .compactMap { ($0["name"] as? String)?.replacingOccurrences(of: "models/", with: "") }
+                    .sorted()
+                if ids.isEmpty {
+                    self.appDelegate?.showAlert(title: "Tidak ada model", message: "Gemini tidak mengembalikan model yang mendukung generateContent.")
+                    return
+                }
+
+                let current = self.geminiModelField.stringValue
+                self.geminiModelField.removeAllItems()
+                self.geminiModelField.addItems(withObjectValues: ids)
+                self.geminiModelField.stringValue = current.isEmpty ? ids[0] : current
+            }
+        }.resume()
+    }
+
     /// Ambil daftar model dari endpoint OpenAI-compatible yang sedang diisi di field Base URL
     /// (+ API Key kalau ada), lalu isi dropdown Model - berguna untuk server lokal (oMLX/
     /// Ollama/LM Studio) yang nama modelnya sering tidak baku/sulit ditebak manual.
@@ -1649,6 +1789,178 @@ class SettingsWindowController: NSWindowController {
         }.resume()
     }
 
+    /// Ambil daftar model dari endpoint OPENAI-COMPATIBLE CUSTOM (bukan OpenAI cloud resmi -
+    /// itu di provider "openai" yang terpisah) - beda dari provider resmi, di sini TIDAK ada
+    /// default Base URL karena tidak ada asumsi server mana yang dituju, jadi wajib diisi dulu.
+    @objc func refreshOpenAICompatibleTranscribeModels() {
+        var base = openaiCompatibleTranscribeBaseURLField.stringValue.trimmingCharacters(in: .whitespaces)
+        while base.hasSuffix("/") { base.removeLast() }
+
+        guard !base.isEmpty else {
+            appDelegate?.showAlert(title: "Base URL belum diisi", message: "Isi dulu Base URL endpoint custom-mu, mis. http://localhost:8000/v1")
+            return
+        }
+        guard let url = URL(string: base + "/models") else {
+            appDelegate?.showAlert(title: "URL tidak valid", message: "Cek isian Base URL transkripsi.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        let apiKey = openaiCompatibleTranscribeApiKeyField.stringValue
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        refreshOpenAICompatibleTranscribeModelsButton.isEnabled = false
+        refreshOpenAICompatibleTranscribeModelsButton.title = "\u{22EF}"
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshOpenAICompatibleTranscribeModelsButton.isEnabled = true
+                self.refreshOpenAICompatibleTranscribeModelsButton.title = "\u{21BB}"
+
+                guard let data = data, error == nil,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let list = json["data"] as? [[String: Any]] else {
+                    self.appDelegate?.showAlert(
+                        title: "Gagal ambil daftar model",
+                        message: error?.localizedDescription ?? "Response dari server tidak sesuai format yang diharapkan."
+                    )
+                    return
+                }
+
+                let ids = list.compactMap { $0["id"] as? String }.sorted()
+                if ids.isEmpty {
+                    self.appDelegate?.showAlert(title: "Tidak ada model", message: "Endpoint ini tidak mengembalikan daftar model.")
+                    return
+                }
+
+                let current = self.openaiCompatibleTranscribeModelField.stringValue
+                self.openaiCompatibleTranscribeModelField.removeAllItems()
+                self.openaiCompatibleTranscribeModelField.addItems(withObjectValues: ids)
+                self.openaiCompatibleTranscribeModelField.stringValue = current.isEmpty ? ids[0] : current
+            }
+        }.resume()
+    }
+
+    /// Ambil daftar model CHAT dari 9Router (GET <URL>/v1/models) untuk peran NOTULEN - beda
+    /// dari peran Transkripsi (refreshNinerouterTranscribeModels di bawah) yang pakai daftar
+    /// model KHUSUS speech-to-text (/v1/models/stt) - dua daftar model 9Router ini terpisah.
+    @objc func refreshNinerouterModels() {
+        var base = ninerouterURLField.stringValue.trimmingCharacters(in: .whitespaces)
+        while base.hasSuffix("/") { base.removeLast() }
+
+        guard !base.isEmpty else {
+            appDelegate?.showAlert(title: "URL belum diisi", message: "Isi dulu URL 9Router-mu, mis. http://localhost:20128")
+            return
+        }
+        guard let url = URL(string: base + "/v1/models") else {
+            appDelegate?.showAlert(title: "URL tidak valid", message: "Cek isian URL 9Router.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        let apiKey = ninerouterApiKeyField.stringValue
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        refreshNinerouterModelsButton.isEnabled = false
+        refreshNinerouterModelsButton.title = "\u{22EF}"
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshNinerouterModelsButton.isEnabled = true
+                self.refreshNinerouterModelsButton.title = "\u{21BB}"
+
+                guard let data = data, error == nil,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let list = json["data"] as? [[String: Any]] else {
+                    self.appDelegate?.showAlert(
+                        title: "Gagal ambil daftar model",
+                        message: error?.localizedDescription ?? "Response dari server tidak sesuai format yang diharapkan."
+                    )
+                    return
+                }
+
+                let ids = list.compactMap { $0["id"] as? String }.sorted()
+                if ids.isEmpty {
+                    self.appDelegate?.showAlert(title: "Tidak ada model", message: "9Router tidak mengembalikan daftar model chat.")
+                    return
+                }
+
+                let current = self.ninerouterModelField.stringValue
+                self.ninerouterModelField.removeAllItems()
+                self.ninerouterModelField.addItems(withObjectValues: ids)
+                self.ninerouterModelField.stringValue = current.isEmpty ? ids[0] : current
+            }
+        }.resume()
+    }
+
+    /// Ambil daftar model SPEECH-TO-TEXT dari 9Router (GET <URL>/v1/models/stt) untuk peran
+    /// Transkripsi - TERPISAH dari daftar model chat (/v1/models, lihat refreshNinerouterModels
+    /// di atas untuk peran Notulen). Kalau daftarnya kosong, itu artinya instance 9Router-nya
+    /// belum punya akun provider STT terpasang sama sekali (bukan salah format model).
+    @objc func refreshNinerouterTranscribeModels() {
+        var base = ninerouterTranscribeURLField.stringValue.trimmingCharacters(in: .whitespaces)
+        while base.hasSuffix("/") { base.removeLast() }
+
+        guard !base.isEmpty else {
+            appDelegate?.showAlert(title: "URL belum diisi", message: "Isi dulu URL 9Router-mu, mis. http://localhost:20128")
+            return
+        }
+        guard let url = URL(string: base + "/v1/models/stt") else {
+            appDelegate?.showAlert(title: "URL tidak valid", message: "Cek isian URL 9Router.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        let apiKey = ninerouterTranscribeApiKeyField.stringValue
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        refreshNinerouterTranscribeModelsButton.isEnabled = false
+        refreshNinerouterTranscribeModelsButton.title = "\u{22EF}"
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshNinerouterTranscribeModelsButton.isEnabled = true
+                self.refreshNinerouterTranscribeModelsButton.title = "\u{21BB}"
+
+                guard let data = data, error == nil,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let list = json["data"] as? [[String: Any]] else {
+                    self.appDelegate?.showAlert(
+                        title: "Gagal ambil daftar model",
+                        message: error?.localizedDescription ?? "Response dari server tidak sesuai format yang diharapkan."
+                    )
+                    return
+                }
+
+                let ids = list.compactMap { $0["id"] as? String }.sorted()
+                if ids.isEmpty {
+                    self.appDelegate?.showAlert(
+                        title: "Tidak ada model STT",
+                        message: "9Router ini belum punya akun provider speech-to-text terpasang (daftar /v1/models/stt kosong) - tambahkan dulu di Dashboard 9Router."
+                    )
+                    return
+                }
+
+                let current = self.ninerouterTranscribeModelField.stringValue
+                self.ninerouterTranscribeModelField.removeAllItems()
+                self.ninerouterTranscribeModelField.addItems(withObjectValues: ids)
+                self.ninerouterTranscribeModelField.stringValue = current.isEmpty ? ids[0] : current
+            }
+        }.resume()
+    }
+
     /// Baca ulang .env & isi semua field - dipanggil setiap window dibuka, supaya selalu
     /// menampilkan nilai TERKINI (mis. kalau ada perubahan manual di .env sejak terakhir dibuka).
     func loadValues() {
@@ -1684,6 +1996,11 @@ class SettingsWindowController: NSWindowController {
         opencodeModelField.removeAllItems()
         opencodeModelField.stringValue = readEnvValue(content, "OPENCODE_MODEL")
 
+        ninerouterURLField.stringValue = readEnvValue(content, "NINEROUTER_URL")
+        ninerouterApiKeyField.stringValue = readEnvValue(content, "NINEROUTER_API_KEY")
+        ninerouterModelField.removeAllItems()
+        ninerouterModelField.stringValue = readEnvValue(content, "NINEROUTER_MODEL")
+
         providerChanged()
 
         let transcribeProvider = readEnvValue(content, "TRANSCRIBE_PROVIDER")
@@ -1696,9 +2013,19 @@ class SettingsWindowController: NSWindowController {
         whisperModelField.stringValue = whisperModel.isEmpty ? "large-v3" : whisperModel
         whisperFallbackModelField.stringValue = readEnvValue(content, "WHISPER_FALLBACK_MODEL")
         geminiApiKeyField.stringValue = readEnvValue(content, "GEMINI_API_KEY")
+        geminiModelField.removeAllItems()
         geminiModelField.stringValue = readEnvValue(content, "GEMINI_MODEL")
         openaiTranscribeApiKeyField.stringValue = readEnvValue(content, "OPENAI_TRANSCRIBE_API_KEY")
-        openaiTranscribeModelField.stringValue = readEnvValue(content, "OPENAI_TRANSCRIBE_MODEL")
+        let openaiTranscribeModel = readEnvValue(content, "OPENAI_TRANSCRIBE_MODEL")
+        openaiTranscribeModelField.stringValue = openaiTranscribeModel.isEmpty ? "gpt-4o-transcribe" : openaiTranscribeModel
+        openaiCompatibleTranscribeBaseURLField.stringValue = readEnvValue(content, "OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL")
+        openaiCompatibleTranscribeApiKeyField.stringValue = readEnvValue(content, "OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY")
+        openaiCompatibleTranscribeModelField.removeAllItems()
+        openaiCompatibleTranscribeModelField.stringValue = readEnvValue(content, "OPENAI_COMPATIBLE_TRANSCRIBE_MODEL")
+        ninerouterTranscribeURLField.stringValue = readEnvValue(content, "NINEROUTER_TRANSCRIBE_URL")
+        ninerouterTranscribeApiKeyField.stringValue = readEnvValue(content, "NINEROUTER_TRANSCRIBE_API_KEY")
+        ninerouterTranscribeModelField.removeAllItems()
+        ninerouterTranscribeModelField.stringValue = readEnvValue(content, "NINEROUTER_TRANSCRIBE_MODEL")
 
         transcribeProviderChanged()
         transcribeFallbackChanged()
@@ -1724,6 +2051,9 @@ class SettingsWindowController: NSWindowController {
         content = setEnvValue(content, "OPENAI_MODEL", openaiModelField.stringValue)
         content = setEnvValue(content, "AGY_MODEL", agyModelField.stringValue)
         content = setEnvValue(content, "OPENCODE_MODEL", opencodeModelField.stringValue)
+        content = setEnvValue(content, "NINEROUTER_URL", ninerouterURLField.stringValue)
+        content = setEnvValue(content, "NINEROUTER_API_KEY", ninerouterApiKeyField.stringValue)
+        content = setEnvValue(content, "NINEROUTER_MODEL", ninerouterModelField.stringValue)
         content = setEnvValue(content, "TRANSCRIBE_PROVIDER", transcribeProviderPopup.titleOfSelectedItem ?? "whisper")
         let transcribeFallbackValue = transcribeFallbackPopup.titleOfSelectedItem ?? fallbackDisabledLabel
         content = setEnvValue(content, "TRANSCRIBE_FALLBACK_PROVIDER", transcribeFallbackValue == fallbackDisabledLabel ? "" : transcribeFallbackValue)
@@ -1733,6 +2063,12 @@ class SettingsWindowController: NSWindowController {
         content = setEnvValue(content, "GEMINI_MODEL", geminiModelField.stringValue)
         content = setEnvValue(content, "OPENAI_TRANSCRIBE_API_KEY", openaiTranscribeApiKeyField.stringValue)
         content = setEnvValue(content, "OPENAI_TRANSCRIBE_MODEL", openaiTranscribeModelField.stringValue)
+        content = setEnvValue(content, "OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL", openaiCompatibleTranscribeBaseURLField.stringValue)
+        content = setEnvValue(content, "OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY", openaiCompatibleTranscribeApiKeyField.stringValue)
+        content = setEnvValue(content, "OPENAI_COMPATIBLE_TRANSCRIBE_MODEL", openaiCompatibleTranscribeModelField.stringValue)
+        content = setEnvValue(content, "NINEROUTER_TRANSCRIBE_URL", ninerouterTranscribeURLField.stringValue)
+        content = setEnvValue(content, "NINEROUTER_TRANSCRIBE_API_KEY", ninerouterTranscribeApiKeyField.stringValue)
+        content = setEnvValue(content, "NINEROUTER_TRANSCRIBE_MODEL", ninerouterTranscribeModelField.stringValue)
         return content
     }
 

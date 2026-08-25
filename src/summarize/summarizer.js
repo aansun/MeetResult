@@ -10,6 +10,7 @@ const { askClaudeCli } = require("./claudeCliClient");
 const { askOpenAi } = require("./openaiClient");
 const { askAgyCli } = require("./agyCliClient");
 const { askOpencodeCli } = require("./opencodeCliClient");
+const { askNinerouter } = require("./ninerouterClient");
 
 const structuredSchema = require("./schemas/structuredSchema");
 const meetingMinutesSchema = require("./schemas/meetingMinutesSchema");
@@ -100,6 +101,9 @@ async function callProvider(providerName, systemPrompt, userPrompt) {
   }
   if (providerName === "opencode") {
     return askOpencodeCli(`${systemPrompt}\n\n${userPrompt}`);
+  }
+  if (providerName === "ninerouter") {
+    return askNinerouter(systemPrompt, userPrompt);
   }
   // "claude" (default)
   if (config.claude.mode === "api") {

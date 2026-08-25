@@ -80,6 +80,67 @@ async function deleteUploadedFile(fileName) {
   }
 }
 
+function describeAxiosError(err) {
+  if (err.response) {
+    return `HTTP ${err.response.status}: ${JSON.stringify(err.response.data)}`;
+  }
+  return err.message;
+}
+
+/**
+ * Panggil generateContent (step yang KENA limit request/menit Gemini, beda dari upload file
+ * yang lewat File API terpisah) - retry sampai `config.gemini.maxRetries` kali dengan jeda
+ * `config.gemini.retryDelayMs` di antaranya (BUKAN retry beruntun agresif) kalau gagal, supaya
+ * transkripsi tetap bisa selesai walau sempat kena rate limit sesaat.
+ */
+async function generateTranscriptWithRetry(uploaded) {
+  const { maxRetries, retryDelayMs } = config.gemini;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      logger.info(
+        `Mentranskrip audio pakai Gemini (model: ${config.gemini.model})` +
+          (attempt > 1 ? ` - percobaan ke-${attempt}/${maxRetries}` : "") +
+          "..."
+      );
+      const { data } = await axios.post(
+        `${GEMINI_BASE}/v1beta/models/${config.gemini.model}:generateContent?key=${config.gemini.apiKey}`,
+        {
+          contents: [
+            {
+              parts: [
+                {
+                  text:
+                    "Transkrip audio rekaman rapat ini ke teks Bahasa Indonesia secara verbatim " +
+                    "(apa adanya, JANGAN diterjemahkan atau diringkas). Keluarkan HANYA teks " +
+                    "transkripnya saja, tanpa timestamp, tanpa penjelasan tambahan.",
+                },
+                { file_data: { mime_type: uploaded.mimeType, file_uri: uploaded.uri } },
+              ],
+            },
+          ],
+        }
+      );
+
+      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("\n") || "";
+      if (!text.trim()) {
+        throw new Error("Gemini tidak mengembalikan teks transkrip (response kosong).");
+      }
+      return text;
+    } catch (err) {
+      lastErr = new Error(describeAxiosError(err));
+      if (attempt === maxRetries) break;
+      logger.warn(
+        `Gemini gagal (percobaan ${attempt}/${maxRetries}): ${lastErr.message} - coba lagi dalam ${
+          retryDelayMs / 1000
+        } detik...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+  throw new Error(`Gemini tetap gagal setelah ${maxRetries} percobaan: ${lastErr.message}`);
+}
+
 /**
  * Transkrip file audio pakai Gemini API (native audio understanding) - alternatif Whisper.
  * Beda dari Whisper: butuh koneksi internet & GEMINI_API_KEY, audio terkirim ke server Google.
@@ -102,33 +163,11 @@ async function transcribeWithGemini(audioFilePath) {
   logger.info("Menunggu Gemini selesai memproses file audio...");
   await waitForFileActive(uploaded.name);
 
-  logger.info(`Mentranskrip audio pakai Gemini (model: ${config.gemini.model})...`);
-  const { data } = await axios.post(
-    `${GEMINI_BASE}/v1beta/models/${config.gemini.model}:generateContent?key=${config.gemini.apiKey}`,
-    {
-      contents: [
-        {
-          parts: [
-            {
-              text:
-                "Transkrip audio rekaman rapat ini ke teks Bahasa Indonesia secara verbatim " +
-                "(apa adanya, JANGAN diterjemahkan atau diringkas). Keluarkan HANYA teks " +
-                "transkripnya saja, tanpa timestamp, tanpa penjelasan tambahan.",
-            },
-            { file_data: { mime_type: uploaded.mimeType, file_uri: uploaded.uri } },
-          ],
-        },
-      ],
-    }
-  );
-
-  await deleteUploadedFile(uploaded.name);
-
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("\n") || "";
-  if (!text.trim()) {
-    throw new Error("Gemini tidak mengembalikan teks transkrip (response kosong).");
+  try {
+    return await generateTranscriptWithRetry(uploaded);
+  } finally {
+    await deleteUploadedFile(uploaded.name);
   }
-  return text;
 }
 
 module.exports = { transcribeWithGemini };
