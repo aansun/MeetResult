@@ -65,4 +65,23 @@ function monthSubdir(baseDir, date) {
   return dir;
 }
 
-module.exports = { sanitizeFileNamePart, toYYYYMMDD, toYYYYMM, monthSubdir, buildUniqueFileName };
+/**
+ * Path file JSON mentah (data notulen sebelum dirender ke .docx, dipakai `meetresult show`
+ * di terminal) untuk sebuah file .docx notulen - disimpan di subfolder "json/" di sebelah
+ * .docx-nya, supaya folder summaries/{bulan}/ cuma berisi dokumen .docx (yang dibagikan ke
+ * orang lain), sementara data mentahnya terpisah rapi.
+ */
+function summaryJsonPathFor(docxPath) {
+  const dir = path.dirname(docxPath);
+  const base = path.basename(docxPath).replace(/\.docx$/, ".json");
+  return path.join(dir, "json", base);
+}
+
+module.exports = {
+  sanitizeFileNamePart,
+  toYYYYMMDD,
+  toYYYYMM,
+  monthSubdir,
+  buildUniqueFileName,
+  summaryJsonPathFor,
+};

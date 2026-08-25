@@ -5,7 +5,7 @@ const config = require("../config/config");
 const logger = require("../utils/logger");
 const { saveMomDocx } = require("./docxGenerator");
 const { renderFromTemplate } = require("./docxTemplateRenderer");
-const { buildUniqueFileName, monthSubdir } = require("../utils/filename");
+const { buildUniqueFileName, monthSubdir, summaryJsonPathFor } = require("../utils/filename");
 const { askClaudeCli } = require("./claudeCliClient");
 const { askOpenAi } = require("./openaiClient");
 const { askAgyCli } = require("./agyCliClient");
@@ -274,8 +274,10 @@ async function summarizeFile(transcriptFilePath, meetingMeta = {}) {
     );
   }
 
-  // Simpan juga data JSON mentah (untuk keperluan `meetresult show` di terminal)
-  const jsonPath = outputPath.replace(/\.docx$/, ".json");
+  // Simpan juga data JSON mentah (untuk keperluan `meetresult show` di terminal) - di subfolder
+  // json/ supaya folder summaries/{bulan}/ cuma berisi .docx (lihat summaryJsonPathFor()).
+  const jsonPath = summaryJsonPathFor(outputPath);
+  fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
   fs.writeFileSync(
     jsonPath,
     JSON.stringify({ templateType: config.mom.templateType, ...templateData }, null, 2),

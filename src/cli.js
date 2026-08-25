@@ -14,6 +14,7 @@ const { summarizeFile } = require("./summarize/summarizer");
 const { runPipelineForMeeting } = require("./pipeline");
 const { startWatcher, finishAndProcess } = require("./scheduler/watcher");
 const { cleanupOldRecordings } = require("./utils/retention");
+const { summaryJsonPathFor } = require("./utils/filename");
 const config = require("./config/config");
 
 const program = new Command();
@@ -89,7 +90,7 @@ program
   .description(
     "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis, Bahasa Indonesia."
   )
-  .version("1.10.4");
+  .version("1.10.5");
 
 program
   .command("login")
@@ -621,7 +622,11 @@ program
       return;
     }
 
-    const jsonPath = m.summaryFile.replace(/\.docx$/, ".json");
+    // Fallback ke lokasi lama (co-located dengan .docx) untuk notulen yang dibuat SEBELUM
+    // json sidecar dipindah ke subfolder json/ (lihat summaryJsonPathFor()).
+    const jsonPath = fs.existsSync(summaryJsonPathFor(m.summaryFile))
+      ? summaryJsonPathFor(m.summaryFile)
+      : m.summaryFile.replace(/\.docx$/, ".json");
     if (fs.existsSync(jsonPath)) {
       const mom = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
 
