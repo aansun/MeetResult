@@ -208,6 +208,12 @@ module.exports = {
     //   SPEAKER/Output tetap didukung baik.
     // "single": mode lama, rekam dari 1 device saja (FFMPEG_AUDIO_DEVICE_INDEX).
     mode: process.env.RECORD_MODE || "dual",
+    // macOS: tahan Mac supaya TIDAK tidur (idle/sistem) selama rekaman berjalan (lewat
+    // `caffeinate -w <pid ffmpeg>`, otomatis lepas begitu ffmpeg berhenti). Insiden nyata: Mac
+    // tidur di tengah rapat -> ffmpeg mati -> audio terputus/hilang. TIDAK bisa mencegah tidur
+    // karena laptop DITUTUP (lid) - itu dipaksa macOS. Set PREVENT_SLEEP_WHILE_RECORDING=false
+    // untuk mematikan.
+    preventSleep: (process.env.PREVENT_SLEEP_WHILE_RECORDING || "true").toLowerCase() !== "false",
     deviceIndex: process.env.FFMPEG_AUDIO_DEVICE_INDEX || ":0", // dipakai jika mode=single
     micDeviceIndex: process.env.FFMPEG_MIC_DEVICE_INDEX || ":0", // mic asli kamu (bukan aggregate)
     systemDeviceIndex: process.env.FFMPEG_SYSTEM_DEVICE_INDEX || ":0", // BlackHole 2ch

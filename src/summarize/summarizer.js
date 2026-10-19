@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const config = require("../config/config");
 const logger = require("../utils/logger");
+const { recordAlert } = require("../utils/alerts");
 const { saveMomDocx } = require("./docxGenerator");
 const { renderFromTemplate } = require("./docxTemplateRenderer");
 const { buildUniqueFileName, monthSubdir, summaryJsonPathFor } = require("../utils/filename");
@@ -131,7 +132,13 @@ async function askAI(systemPrompt, userPrompt) {
 
     logger.warn(`Provider AI notulen '${primary}' gagal (${err.message}) - mencoba fallback '${fallback}'...`);
     try {
-      return await callProvider(fallback, systemPrompt, userPrompt);
+      const result = await callProvider(fallback, systemPrompt, userPrompt);
+      recordAlert({
+        level: "warning",
+        kind: "notulen",
+        message: `Provider notulen '${primary}' gagal, notulen dibuat lewat fallback '${fallback}'. Error '${primary}': ${err.message}`,
+      });
+      return result;
     } catch (fallbackErr) {
       throw new Error(
         `Provider notulen utama ('${primary}': ${err.message}) DAN fallback ('${fallback}': ${fallbackErr.message}) sama-sama gagal.`

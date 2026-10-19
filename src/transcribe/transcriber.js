@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const config = require("../config/config");
 const logger = require("../utils/logger");
+const { recordAlert } = require("../utils/alerts");
 const { monthSubdir } = require("../utils/filename");
 const { transcribeWithGemini } = require("./geminiTranscriber");
 const { transcribeWithOpenAi } = require("./openaiTranscriber");
@@ -160,7 +161,13 @@ async function transcribeAudio(audioFilePath) {
     logger.warn(`Transkripsi via '${primary}' gagal (${err.message}) - mencoba fallback '${fallback}'...`);
     try {
       const fallbackWhisperModel = fallback === "whisper" ? config.whisper.fallbackModel : undefined;
-      return await transcribeWithProvider(fallback, audioFilePath, outDir, fallbackWhisperModel);
+      const result = await transcribeWithProvider(fallback, audioFilePath, outDir, fallbackWhisperModel);
+      recordAlert({
+        level: "warning",
+        kind: "transkripsi",
+        message: `Transkripsi via '${primary}' gagal, memakai fallback '${fallback}' (hasil mungkin kurang akurat). Error '${primary}': ${err.message}`,
+      });
+      return result;
     } catch (fallbackErr) {
       throw new Error(
         `Transkripsi gagal di provider utama ('${primary}': ${err.message}) DAN fallback ('${fallback}': ${fallbackErr.message}).`

@@ -62,10 +62,54 @@ function findLatestClaudeDesktopBinary() {
     });
 
   for (const version of versions) {
-    const candidate = path.join(CLAUDE_VERSIONS_DIR, version, "claude.app", "Contents", "MacOS", "claude");
-    if (fs.existsSync(candidate)) return candidate;
+    const versionDir = path.join(CLAUDE_VERSIONS_DIR, version);
+    // Layout lama: <versi>/claude.app - layout baru Claude Desktop: <versi>/<hash>/claude.app
+    const appDirs = [versionDir];
+    try {
+      for (const sub of fs.readdirSync(versionDir)) {
+        const subPath = path.join(versionDir, sub);
+        if (fs.statSync(subPath).isDirectory()) appDirs.push(subPath);
+      }
+    } catch (e) {}
+    for (const dir of appDirs) {
+      const candidate = path.join(dir, "claude.app", "Contents", "MacOS", "claude");
+      if (fs.existsSync(candidate)) return candidate;
+    }
   }
   return null;
+}
+
+/**
+ * Kalau `claude` TIDAK ada sama sekali di folder PATH manapun (bukan cuma rusak - mis. ikut
+ * terhapus saat Claude Desktop update/reinstall), buat symlink baru ke versi Claude Desktop
+ * terbaru di folder pertama yang bisa ditulis. Tidak menyentuh apa pun kalau `claude` sudah ada
+ * (instalasi lain/symlink yang masih sehat).
+ */
+function createMissingClaudeSymlink() {
+  const exists = CANDIDATE_SYMLINK_DIRS.some((dir) => {
+    try {
+      fs.lstatSync(path.join(dir, "claude"));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  });
+  if (exists) return [];
+
+  const latest = findLatestClaudeDesktopBinary();
+  if (!latest) return [];
+
+  for (const dir of CANDIDATE_SYMLINK_DIRS) {
+    const linkPath = path.join(dir, "claude");
+    try {
+      if (!fs.existsSync(dir)) continue;
+      fs.accessSync(dir, fs.constants.W_OK);
+      fs.symlinkSync(latest, linkPath);
+      logger.success(`Symlink 'claude' hilang - dibuat ulang di ${linkPath} -> ${latest}`);
+      return [{ path: linkPath, repaired: true, target: latest }];
+    } catch (e) {}
+  }
+  return [];
 }
 
 /**
@@ -82,6 +126,7 @@ function checkAndRepairClaudeCliSymlinks() {
   if (os.platform() !== "darwin") return [];
 
   const repaired = [];
+  repaired.push(...createMissingClaudeSymlink());
   for (const dir of CANDIDATE_SYMLINK_DIRS) {
     const linkPath = path.join(dir, "claude");
     if (!isBrokenClaudeDesktopSymlink(linkPath)) continue;

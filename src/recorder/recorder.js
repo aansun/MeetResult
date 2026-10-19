@@ -72,6 +72,23 @@ function buildCaptureArgs(deviceIndex, outputFile) {
   return ["-y", "-f", "pulse", "-i", deviceIndex, "-ar", sampleRate, "-ac", "1", outputFile];
 }
 
+/**
+ * Tahan Mac dari tidur selama proses `pid` (ffmpeg) hidup: `caffeinate -i -m -s -w <pid>` -
+ * caffeinate keluar sendiri begitu ffmpeg berhenti (normal/crash/kill), jadi tidak ada risiko
+ * Mac tertahan melek selamanya walau watcher mati. Hanya macOS; gagal spawn tidak fatal.
+ */
+function preventSleepWhilePid(pid) {
+  if (!config.ffmpeg.preventSleep || os.platform() !== "darwin" || !pid) return;
+  try {
+    const child = spawn("caffeinate", ["-i", "-m", "-s", "-w", String(pid)], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch (e) {}
+}
+
 function spawnCapture(deviceIndex, outputFile, logFd) {
   const args = buildCaptureArgs(deviceIndex, outputFile);
   const child = spawn("ffmpeg", args, {
@@ -79,6 +96,7 @@ function spawnCapture(deviceIndex, outputFile, logFd) {
     stdio: ["ignore", logFd, logFd],
   });
   child.unref();
+  preventSleepWhilePid(child.pid);
   return child.pid;
 }
 

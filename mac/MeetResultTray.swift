@@ -23,6 +23,7 @@ let pidFile = dataDir + "/watcher.pid"
 let watcherMetaFile = dataDir + "/watcher-meta.json"
 let logFile = dataDir + "/watcher.log"
 let summariesDir = dataDir + "/summaries"
+let alertsFile = dataDir + "/alerts.json"
 let recordingStateFile = dataDir + "/recording-state.json"
 let dbFile = dataDir + "/db.json"
 let manualLogFile = dataDir + "/manual-record.log"
@@ -78,6 +79,9 @@ let envFilePath = projectDir + "/.env"
 // ID model Claude yang diketahui - dipakai untuk isi awal dropdown di window Pengaturan.
 // Combo box tetap bisa diketik manual kalau ada ID lain yang belum masuk daftar ini.
 let knownClaudeModels = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"]
+// Alias bawaan Claude Code CLI (--model) - selalu menunjuk ke model TERBARU di tiap keluarga,
+// jadi untuk mode CLI ini pilihan paling aman/updated tanpa perlu tahu ID lengkapnya.
+let claudeCliAliases = ["opus", "sonnet", "haiku"]
 
 // Model whisper-ctranslate2 yang didukung (dicek langsung dari `--help` binary terinstall,
 // bukan tebakan) - dipakai untuk isi dropdown Model Whisper di window Pengaturan.
@@ -155,6 +159,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Submenu Event List
     var eventListMenu: NSMenu!
+    // Submenu "Gagal Diproses" - meeting error/macet yang masih bisa diulang (lihat refreshRetryMenu)
+    var retryMenu: NSMenu!
+    var retryMenuItem: NSMenuItem!
+    var retryingMeetingIds = Set<String>()
+    // Submenu "Peringatan" - masalah yang dicatat Node ke data/alerts.json (provider notulen/
+    // transkripsi gagal, rekaman gagal difinalisasi, proses gagal) lengkap dengan isi error-nya.
+    var alertsMenu: NSMenu!
+    var alertsMenuItem: NSMenuItem!
 
     var settingsWindowController: SettingsWindowController?
 
@@ -253,6 +265,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let eventListMenuItem = NSMenuItem(title: "Event List", action: nil, keyEquivalent: "")
         eventListMenuItem.submenu = eventListMenu
         menu.addItem(eventListMenuItem)
+
+        retryMenu = NSMenu()
+        retryMenuItem = NSMenuItem(title: "Gagal Diproses", action: nil, keyEquivalent: "")
+        retryMenuItem.submenu = retryMenu
+        retryMenuItem.isHidden = true
+        menu.addItem(retryMenuItem)
+
+        alertsMenu = NSMenu()
+        alertsMenuItem = NSMenuItem(title: "Peringatan", action: nil, keyEquivalent: "")
+        alertsMenuItem.submenu = alertsMenu
+        alertsMenuItem.isHidden = true
+        menu.addItem(alertsMenuItem)
         refreshEventList()
 
         menu.addItem(NSMenuItem.separator())
@@ -291,12 +315,114 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
+    // MARK: - Peringatan (alerts.json)
+
+    func readAllAlerts() -> [[String: Any]] {
+        guard let data = fm.contents(atPath: alertsFile),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return list
+    }
+
+    func alertId(_ a: [String: Any]) -> Int64 {
+        if let n = a["id"] as? NSNumber { return n.int64Value }
+        return 0
+    }
+
+    /// Peringatan yang belum di-"Tandai sudah dibaca" (id > dismissed) DAN umurnya <= 3 hari.
+    func loadActiveAlerts() -> [[String: Any]] {
+        let dismissed = Int64(UserDefaults.standard.integer(forKey: "mr.dismissedAlertId"))
+        let minId = Int64((Date().timeIntervalSince1970 - 3 * 24 * 3600) * 1000)
+        return readAllAlerts()
+            .filter { alertId($0) > dismissed && alertId($0) > minId }
+            .sorted { alertId($0) > alertId($1) }
+    }
+
+    func alertKindLabel(_ kind: String) -> String {
+        switch kind {
+        case "notulen": return "Notulen AI"
+        case "transkripsi": return "Transkripsi"
+        case "rekaman": return "Rekaman"
+        default: return "Proses"
+        }
+    }
+
+    func alertTimeLabel(_ a: [String: Any]) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "dd MMM HH:mm"
+        return f.string(from: Date(timeIntervalSince1970: Double(alertId(a)) / 1000))
+    }
+
+    func refreshAlertsMenu(_ alerts: [[String: Any]]) {
+        alertsMenu.removeAllItems()
+        alertsMenuItem.isHidden = alerts.isEmpty
+        guard !alerts.isEmpty else { return }
+        let hasError = alerts.contains { ($0["level"] as? String) == "error" }
+        alertsMenuItem.title = (hasError ? "\u{26D4}\u{FE0F}" : "\u{26A0}\u{FE0F}") + " Peringatan (\(alerts.count))"
+
+        for a in alerts.prefix(8) {
+            let level = (a["level"] as? String) ?? "warning"
+            let kind = alertKindLabel((a["kind"] as? String) ?? "")
+            let msg = (a["message"] as? String) ?? ""
+            let meeting = (a["meeting"] as? String).map { " [\($0)]" } ?? ""
+            let icon = level == "error" ? "\u{26D4}\u{FE0F}" : "\u{26A0}\u{FE0F}"
+            let item = NSMenuItem(
+                title: "\(icon) \(alertTimeLabel(a)) \(kind)\(meeting): \(String(msg.prefix(70)))",
+                action: #selector(showAlertDetail(_:)), keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = "\(kind)\(meeting) - \(alertTimeLabel(a))\n\n\(msg)"
+            alertsMenu.addItem(item)
+        }
+        alertsMenu.addItem(NSMenuItem.separator())
+        let clear = NSMenuItem(title: "Tandai Semua Sudah Dibaca", action: #selector(dismissAlerts), keyEquivalent: "")
+        clear.target = self
+        alertsMenu.addItem(clear)
+    }
+
+    @objc func showAlertDetail(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
+        showAlert(title: "Detail Peringatan MeetResult", message: text)
+    }
+
+    @objc func dismissAlerts() {
+        let maxId = readAllAlerts().map { alertId($0) }.max() ?? 0
+        UserDefaults.standard.set(Int(maxId), forKey: "mr.dismissedAlertId")
+        updateStatus()
+    }
+
+    /// Notifikasi macOS SEKALI per peringatan baru (berisi jenis + isi error), supaya tahu ada
+    /// masalah tanpa harus membuka menu. Pertama kali jalan: tandai yang sudah ada sebagai
+    /// sudah-diberitahu (tidak membanjiri notifikasi lama).
+    func notifyNewAlerts() {
+        let all = readAllAlerts()
+        let maxId = all.map { alertId($0) }.max() ?? 0
+        let key = "mr.lastNotifiedAlertId"
+        if UserDefaults.standard.object(forKey: key) == nil {
+            UserDefaults.standard.set(Int(maxId), forKey: key)
+            return
+        }
+        let last = Int64(UserDefaults.standard.integer(forKey: key))
+        let fresh = all.filter { alertId($0) > last }.sorted { alertId($0) < alertId($1) }
+        guard let newest = fresh.last else { return }
+        UserDefaults.standard.set(Int(maxId), forKey: key)
+
+        let kind = alertKindLabel((newest["kind"] as? String) ?? "")
+        let meeting = (newest["meeting"] as? String).map { " (\($0))" } ?? ""
+        let more = fresh.count > 1 ? " (+\(fresh.count - 1) peringatan lain)" : ""
+        let isError = (newest["level"] as? String) == "error"
+        showNotification(
+            title: "MeetResult \(isError ? "\u{26D4}\u{FE0F} GAGAL" : "\u{26A0}\u{FE0F} Peringatan"): \(kind)\(meeting)",
+            message: String(((newest["message"] as? String) ?? "").prefix(220)) + more
+        )
+    }
+
     // MARK: - Event List
 
     /// Baca data/db.json, ambil meeting yang jadwalnya HARI INI saja (maks 15, urut kronologis),
     /// tampilkan di submenu "Event List". Meeting berstatus "done" bisa langsung diklik untuk
     /// buka notulennya.
     func refreshEventList() {
+        refreshRetryMenu()
         eventListMenu.removeAllItems()
 
         guard let data = fm.contents(atPath: dbFile),
@@ -352,6 +478,124 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openEventSummary(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    // MARK: - Retry meeting gagal
+
+    /// Isi submenu "Gagal Diproses": meeting berstatus error (30 hari terakhir), atau
+    /// processing/transcribed yang macet (>3 jam sejak jadwal mulai, mis. watcher/Mac mati di
+    /// tengah proses) DAN masih punya audio atau transkrip di disk (kalau dua-duanya sudah
+    /// hilang tidak ada yang bisa diulang, jadi tidak ditampilkan). Menu disembunyikan kalau kosong.
+    func refreshRetryMenu() {
+        retryMenu.removeAllItems()
+
+        guard let data = fm.contents(atPath: dbFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let meetings = json["meetings"] as? [[String: Any]] else {
+            retryMenuItem.isHidden = true
+            return
+        }
+
+        let now = Date()
+        let candidates = meetings.filter { m in
+            guard let id = m["id"] as? String,
+                  let status = m["status"] as? String,
+                  let start = m["start"] as? String, let startDate = parseIsoDate(start) else { return false }
+            let age = now.timeIntervalSince(startDate)
+            if age > 30 * 24 * 3600 { return false }
+            let failed = status == "error"
+            let stuck = (status == "processing" || status == "transcribed") && age > 3 * 3600
+            guard failed || stuck || retryingMeetingIds.contains(id) else { return false }
+            let hasAudio = (m["audioFile"] as? String).map { fm.fileExists(atPath: $0) } ?? false
+            let hasTranscript = (m["transcriptFile"] as? String).map { fm.fileExists(atPath: $0) } ?? false
+            return hasAudio || hasTranscript
+        }.sorted { (a: [String: Any], b: [String: Any]) -> Bool in
+            ((a["start"] as? String) ?? "") > ((b["start"] as? String) ?? "") // terbaru dulu
+        }
+
+        retryMenuItem.isHidden = candidates.isEmpty
+        retryMenuItem.title = "Gagal Diproses (\(candidates.count))"
+
+        for m in candidates.prefix(15) {
+            guard let id = m["id"] as? String else { continue }
+            let subject = (m["subject"] as? String) ?? "(Tanpa judul)"
+            let dateLabel = formatShortDate((m["start"] as? String) ?? "")
+            let hasAudio = (m["audioFile"] as? String).map { fm.fileExists(atPath: $0) } ?? false
+            let hasTranscript = (m["transcriptFile"] as? String).map { fm.fileExists(atPath: $0) } ?? false
+
+            if retryingMeetingIds.contains(id) {
+                let busy = NSMenuItem(title: "\u{23F3} \(subject) — sedang diproses ulang...", action: nil, keyEquivalent: "")
+                busy.isEnabled = false
+                retryMenu.addItem(busy)
+                continue
+            }
+
+            let parent = NSMenuItem(title: "\u{26A0}\u{FE0F} \(subject) — \(dateLabel)", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+
+            if hasTranscript {
+                let redoSummary = NSMenuItem(title: "Buat ulang notulen (pakai transkrip yang ada)", action: #selector(retryMeeting(_:)), keyEquivalent: "")
+                redoSummary.target = self
+                redoSummary.representedObject = ["id": id, "transcribe": false] as [String: Any]
+                sub.addItem(redoSummary)
+            }
+            if hasAudio {
+                let title = hasTranscript ? "Transkrip ulang dari audio + notulen" : "Transkrip dari audio + notulen"
+                let redoAll = NSMenuItem(title: title, action: #selector(retryMeeting(_:)), keyEquivalent: "")
+                redoAll.target = self
+                redoAll.representedObject = ["id": id, "transcribe": true] as [String: Any]
+                sub.addItem(redoAll)
+            }
+            if let err = m["error"] as? String, !err.isEmpty {
+                sub.addItem(NSMenuItem.separator())
+                let errItem = NSMenuItem(title: "Error: " + String(err.prefix(90)), action: nil, keyEquivalent: "")
+                errItem.isEnabled = false
+                sub.addItem(errItem)
+            }
+            parent.submenu = sub
+            retryMenu.addItem(parent)
+        }
+    }
+
+    /// Jalankan `meetresult retry <id>` di background (lanjut dari titik yang masih bisa dipakai),
+    /// kasih notifikasi saat selesai/gagal. `--transcribe` memaksa transkripsi ulang dari audio.
+    @objc func retryMeeting(_ sender: NSMenuItem) {
+        guard let info = sender.representedObject as? [String: Any],
+              let id = info["id"] as? String else { return }
+        let forceTranscribe = (info["transcribe"] as? Bool) ?? false
+        guard !retryingMeetingIds.contains(id) else { return }
+
+        retryingMeetingIds.insert(id)
+        refreshRetryMenu()
+        showNotification(
+            title: "MeetResult",
+            message: forceTranscribe
+                ? "Memulai transkrip ulang + notulen... (bisa beberapa menit)"
+                : "Memulai pembuatan ulang notulen..."
+        )
+
+        var args = ["retry", id]
+        if forceTranscribe { args.append("--transcribe") }
+        let task = buildMeetResultTask(args, logPath: logFile)
+        task.terminationHandler = { [weak self] proc in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.retryingMeetingIds.remove(id)
+                self.refreshEventList()
+                if proc.terminationStatus == 0 {
+                    self.showNotification(title: "MeetResult", message: "Proses ulang selesai - notulen siap dibuka di Event List/Buka Notulen.")
+                } else {
+                    self.showNotification(title: "MeetResult", message: "Proses ulang gagal lagi - cek data/watcher.log untuk detail error.")
+                }
+            }
+        }
+        do {
+            try task.run()
+        } catch {
+            retryingMeetingIds.remove(id)
+            refreshEventList()
+            showAlert(title: "Gagal menjalankan proses ulang", message: error.localizedDescription)
+        }
     }
 
     // MARK: - Status checks
@@ -487,6 +731,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let activeId = activeRecordingMeetingId()
         let isAutoTriggered = recordingActive && !(activeId?.hasPrefix("manual-") ?? false)
         let stale = isWatcherCodeStale()
+        let activeAlerts = loadActiveAlerts()
 
         let attrTitle = NSMutableAttributedString()
         // Hijau = watch aktif & standby (belum merekam), Merah = sedang merekam otomatis
@@ -508,7 +753,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ]
         ))
         attrTitle.append(NSAttributedString(
-            string: stale ? "MR \u{26A0}\u{FE0F}" : "MR",
+            string: (stale || !activeAlerts.isEmpty) ? "MR \u{26A0}\u{FE0F}" : "MR",
             attributes: [
                 .foregroundColor: NSColor.labelColor,
                 .font: NSFont.menuBarFont(ofSize: 13)
@@ -567,6 +812,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         recordManualItem.isEnabled = !recordingActive
         stopManualItem.isEnabled = recordingActive
 
+        refreshAlertsMenu(activeAlerts)
+        notifyNewAlerts()
         refreshEventList()
     }
 
@@ -822,6 +1069,8 @@ class SettingsWindowController: NSWindowController {
     let summaryFallbackPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let claudeModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let claudeCliModelField = NSComboBox()
+    let refreshClaudeCliModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
+    let refreshClaudeApiModelsButton = NSButton(title: "\u{21BB}", target: nil, action: nil)
     let claudeApiModelField = NSComboBox()
     let claudeApiKeyField = NSSecureTextField(string: "")
     let openaiBaseURLField = NSTextField(string: "")
@@ -1044,7 +1293,7 @@ class SettingsWindowController: NSWindowController {
         summaryFallbackPopup.target = self
         summaryFallbackPopup.action = #selector(summaryFallbackChanged)
 
-        claudeCliModelField.addItems(withObjectValues: knownClaudeModels)
+        claudeCliModelField.addItems(withObjectValues: claudeCliAliases + knownClaudeModels)
         claudeApiModelField.addItems(withObjectValues: knownClaudeModels)
         claudeCliModelField.placeholderString = "default Claude Code CLI"
         claudeApiModelField.placeholderString = "pilih atau ketik manual"
@@ -1060,8 +1309,13 @@ class SettingsWindowController: NSWindowController {
         // Claude punya 2 varian Model (CLI vs API) - yang tampil menyesuaikan Type yang dipilih,
         // jadi di layar tetap kelihatan sebagai satu slot "Model:" (lihat notulenRows(for:)).
         claudeTypeRow = row("Type:", claudeModePopup)
-        claudeCliModelRow = row("Model:", claudeCliModelField)
-        claudeApiModelRow = row("Model:", claudeApiModelField)
+        for b in [refreshClaudeCliModelsButton, refreshClaudeApiModelsButton] {
+            b.target = self
+            b.action = #selector(refreshClaudeModels(_:))
+            b.toolTip = "Ambil daftar model terbaru dari API Anthropic (butuh API Key di mode API). Mode CLI tanpa API Key: pakai alias opus/sonnet/haiku yang selalu terbaru."
+        }
+        claudeCliModelRow = row("Model:", claudeCliModelField, trailing: refreshClaudeCliModelsButton)
+        claudeApiModelRow = row("Model:", claudeApiModelField, trailing: refreshClaudeApiModelsButton)
         claudeApiKeyRow = row("API Key:", claudeApiKeyField)
         openaiBaseRow = row("Base URL:", openaiBaseURLField)
         openaiKeyRow = row("API Key:", openaiApiKeyField)
@@ -1677,6 +1931,66 @@ class SettingsWindowController: NSWindowController {
         rebuildNotulenGroups()
         resizeToFitContent()
     }
+
+    /// Refresh daftar model Claude. Sumber daftar lengkap yang valid HANYA API Anthropic
+    /// (GET /v1/models, butuh API Key) - Claude Code CLI tidak punya perintah daftar model.
+    /// Tanpa API Key (mode CLI/langganan), isi dropdown dengan ALIAS CLI (opus/sonnet/haiku) yang
+    /// selalu menunjuk model terbaru, supaya tetap "updated" tanpa perlu API Key.
+    @objc func refreshClaudeModels(_ sender: NSButton) {
+        let field = (sender === refreshClaudeCliModelsButton) ? claudeCliModelField : claudeApiModelField
+        let isCli = (sender === refreshClaudeCliModelsButton)
+        let apiKey = claudeApiKeyField.stringValue.trimmingCharacters(in: .whitespaces)
+
+        func fill(_ ids: [String]) {
+            let current = field.stringValue
+            field.removeAllItems()
+            field.addItems(withObjectValues: ids)
+            field.stringValue = current
+        }
+
+        guard !apiKey.isEmpty else {
+            if isCli {
+                fill(claudeCliAliases + knownClaudeModels)
+                appDelegate?.showAlert(
+                    title: "Mode CLI: pakai alias terbaru",
+                    message: "Claude Code CLI tidak punya daftar model online. Pilih alias 'opus', 'sonnet', atau 'haiku' - alias ini SELALU otomatis menunjuk ke model terbaru di keluarganya. Untuk daftar ID model lengkap dari Anthropic, isi API Key di mode API lalu klik refresh lagi."
+                )
+            } else {
+                appDelegate?.showAlert(title: "API Key belum diisi", message: "Isi dulu API Key Anthropic untuk mengambil daftar model.")
+            }
+            return
+        }
+        guard let url = URL(string: "https://api.anthropic.com/v1/models?limit=100") else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+
+        sender.isEnabled = false
+        sender.title = "\u{22EF}"
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                sender.isEnabled = true
+                sender.title = "\u{21BB}"
+                guard let data = data, error == nil,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let list = json["data"] as? [[String: Any]] else {
+                    self.appDelegate?.showAlert(title: "Gagal ambil daftar model", message: error?.localizedDescription ?? "Response API Anthropic tidak sesuai format yang diharapkan.")
+                    return
+                }
+                let ids = list.compactMap { $0["id"] as? String }
+                if ids.isEmpty {
+                    let msg = ((json["error"] as? [String: Any])?["message"] as? String) ?? "Tidak ada model dikembalikan."
+                    self.appDelegate?.showAlert(title: "Tidak ada model", message: msg)
+                    return
+                }
+                fill(isCli ? self.claudeCliAliasesPlus(ids) : ids)
+            }
+        }.resume()
+    }
+
+    func claudeCliAliasesPlus(_ ids: [String]) -> [String] { claudeCliAliases + ids }
 
     /// Ambil daftar model dari Gemini ListModels API resmi (GET /v1beta/models?key=...) - beda
     /// dari provider OpenAI-compatible lain, Gemini butuh API Key di QUERY STRING (bukan header

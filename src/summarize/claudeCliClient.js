@@ -46,10 +46,14 @@ function askClaudeCli(fullPrompt) {
 
     proc.on("close", (code) => {
       if (code !== 0) {
+        // Claude CLI menulis pesan error (mis. "Failed to authenticate: OAuth session expired")
+        // ke STDOUT, bukan stderr - gabungkan keduanya supaya alasan aslinya ikut terbaca.
+        const detail = `${stderr}\n${stdout}`.replace(/\s+/g, " ").trim().slice(0, 300);
+        const hint = /authenticate|OAuth|login|expired|401/i.test(detail)
+          ? " -> Sesi login Claude habis, jalankan 'claude login' di terminal."
+          : "";
         return reject(
-          new Error(
-            `Claude Code CLI keluar dengan kode error ${code}. ${stderr || ""}`
-          )
+          new Error(`Claude Code CLI keluar dengan kode error ${code}. ${detail}${hint}`)
         );
       }
       resolve(stdout.trim());

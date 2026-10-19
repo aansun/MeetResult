@@ -11,10 +11,11 @@ const { getUpcomingTeamsMeetings } = require("./calendar");
 const recorder = require("./recorder/recorder");
 const { transcribeAudio } = require("./transcribe/transcriber");
 const { summarizeFile } = require("./summarize/summarizer");
-const { runPipelineForMeeting } = require("./pipeline");
+const { runPipelineForMeeting, retryPipelineForMeeting } = require("./pipeline");
 const { startWatcher, finishAndProcess } = require("./scheduler/watcher");
 const { cleanupOldRecordings } = require("./utils/retention");
 const { summaryJsonPathFor } = require("./utils/filename");
+const { recordAlert } = require("./utils/alerts");
 const config = require("./config/config");
 
 const program = new Command();
@@ -90,7 +91,7 @@ program
   .description(
     "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis, Bahasa Indonesia."
   )
-  .version("1.10.5");
+  .version("1.10.6");
 
 program
   .command("login")
@@ -164,6 +165,20 @@ program
     process.on("exit", cleanupPid);
     process.on("SIGINT", () => process.exit(0));
     process.on("SIGTERM", () => process.exit(0));
+
+    // Jaring pengaman TERAKHIR - insiden nyata pernah terjadi: 1 exception yang lolos dari
+    // timer setTimeout (scheduleAutoStop/scheduleSilenceCheck di watcher.js, TIDAK ada try/catch
+    // di level pemanggil) jadi unhandled rejection yang meng-CRASH TOTAL proses watcher, macet
+    // sampai di-restart manual (baru ketahuan berhari-hari kemudian). Sumber aslinya sudah
+    // diperbaiki, tapi log & lanjutkan proses di sini juga sebagai jaring pengaman kalau ada
+    // celah lain yang belum ketahuan - watcher yang tetap jalan (walau 1 siklus gagal) jauh
+    // lebih baik daripada watcher yang diam-diam mati total.
+    process.on("unhandledRejection", (err) => {
+      logger.error(`Unhandled rejection di watcher (proses TETAP jalan): ${err?.message || err}`);
+    });
+    process.on("uncaughtException", (err) => {
+      logger.error(`Uncaught exception di watcher (proses TETAP jalan): ${err?.message || err}`);
+    });
 
     startWatcher();
   });
@@ -348,12 +363,32 @@ program
       return;
     }
 
-    logger.info("Claude tidak punya endpoint daftar model publik - gunakan salah satu ID berikut:");
-    ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"].forEach((id) => {
-      const active =
-        config.claude.mode === "api" ? config.claude.model === id : config.claude.cliModel === id;
-      console.log(`  ${active ? chalk.green("● " + id + "  (aktif)") : "  " + id}`);
-    });
+    const activeClaude = config.claude.mode === "api" ? config.claude.model : config.claude.cliModel;
+    const printClaude = (id) =>
+      console.log(`  ${id === activeClaude ? chalk.green("● " + id + "  (aktif)") : "  " + id}`);
+
+    let liveIds = null;
+    if (config.claude.apiKey) {
+      try {
+        const axios = require("axios");
+        const { data } = await axios.get("https://api.anthropic.com/v1/models?limit=100", {
+          headers: { "x-api-key": config.claude.apiKey, "anthropic-version": "2023-06-01" },
+        });
+        liveIds = (data.data || []).map((m) => m.id);
+        logger.info("Daftar model TERBARU dari API Anthropic (GET /v1/models):");
+      } catch (err) {
+        logger.warn(`Gagal ambil daftar dari API Anthropic (${err.message}) - pakai daftar bawaan.`);
+      }
+    }
+    if (liveIds) {
+      liveIds.forEach(printClaude);
+    } else {
+      logger.info(
+        "Alias Claude Code CLI (selalu menunjuk model TERBARU, cocok untuk CLAUDE_CLI_MODEL) + ID bawaan " +
+          "(isi ANTHROPIC_API_KEY untuk daftar ID lengkap terbaru dari Anthropic):"
+      );
+      ["opus", "sonnet", "haiku", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"].forEach(printClaude);
+    }
     logger.info(
       `Model aktif saat ini: ${
         config.claude.mode === "api"
@@ -577,6 +612,28 @@ program
       await runPipelineForMeeting(record);
     } catch (err) {
       logger.error(err.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("retry <meetingId>")
+  .description("Ulangi proses meeting yang gagal/macet (transkrip ada -> cuma notulen; kalau belum -> transkrip dari audio)")
+  .option("--transcribe", "Paksa transkripsi ulang dari audio walau transkrip lama sudah ada")
+  .action(async (meetingId, opts) => {
+    const record = db.getMeeting(meetingId);
+    if (!record) {
+      logger.error(`Meeting "${meetingId}" tidak ditemukan.`);
+      process.exit(1);
+    }
+    db.updateMeeting(meetingId, { status: "processing", error: null });
+    logger.info(`Memproses ulang meeting: ${record.subject}`);
+    try {
+      await retryPipelineForMeeting(db.getMeeting(meetingId), { forceTranscribe: !!opts.transcribe });
+    } catch (err) {
+      logger.error(`Gagal memproses ulang ${record.subject}: ${err.message}`);
+      recordAlert({ level: "error", kind: "proses", meeting: record.subject, message: `Proses ulang gagal: ${err.message}` });
+      db.updateMeeting(meetingId, { status: "error", error: err.message });
       process.exit(1);
     }
   });

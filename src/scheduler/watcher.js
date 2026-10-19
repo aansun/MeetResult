@@ -10,6 +10,7 @@ const { isTeamsRunning } = require("../utils/teamsDetect");
 const { hasRecentAudioActivity } = require("../utils/audioActivity");
 const { checkAndRepairClaudeCliSymlinks } = require("../utils/claudeCliHealth");
 const { updateWatcherMeta, readWatcherMeta } = require("../utils/watcherMeta");
+const { recordAlert } = require("../utils/alerts");
 
 let stopTimer = null;
 
@@ -35,14 +36,25 @@ function selfHealClaudeCliIfRelevant() {
  */
 async function stopAndDiscardRecording(record, reason) {
   logger.warn(`Rekaman "${record.subject}" dihentikan otomatis: ${reason}`);
-  const state = recorder.stopRecording();
-  if (state) {
-    const finalAudioFile = await recorder.finalizeRecording(state);
-    if (finalAudioFile) {
-      db.updateMeeting(record.id, { audioFile: finalAudioFile });
+  try {
+    const state = recorder.stopRecording();
+    if (state) {
+      const finalAudioFile = await recorder.finalizeRecording(state);
+      if (finalAudioFile) {
+        db.updateMeeting(record.id, { audioFile: finalAudioFile });
+      }
     }
+    db.updateMeeting(record.id, { status: "skipped", skipReason: reason });
+  } catch (err) {
+    // finalizeRecording (gabung mic+system via ffmpeg) bisa gagal (mis. file rusak/kepotong
+    // paksa) - JANGAN biarkan exception ini lolos ke pemanggil (setTimeout di
+    // scheduleSilenceCheck() TIDAK ada try/catch di level itu, jadi promise reject di sini
+    // akan CRASH seluruh proses watcher - insiden nyata yang pernah terjadi). Tandai error
+    // saja, audio mentah (belum digabung) tetap ada di data/recordings/ untuk pemulihan manual.
+    logger.error(`Gagal finalize rekaman "${record.subject}" yang dibuang: ${err.message}`);
+    recordAlert({ level: "error", kind: "rekaman", meeting: record.subject, message: `Gagal finalize rekaman: ${err.message}` });
+    db.updateMeeting(record.id, { status: "error", error: `Gagal finalize rekaman: ${err.message}` });
   }
-  db.updateMeeting(record.id, { status: "skipped", skipReason: reason });
 }
 
 /**
@@ -60,25 +72,34 @@ function scheduleSilenceCheck(record, state, stopInMs) {
   const checkInMs = Math.min(minutes * 60 * 1000, Math.max(stopInMs - 30000, 10000));
 
   setTimeout(async () => {
-    if (recorder.getActiveMeetingId() !== record.id) return; // sudah berhenti lebih dulu
+    // Callback setTimeout TIDAK punya try/catch di level pemanggil manapun (beda dari
+    // checkAndAct() yang selalu dibungkus try/catch) - exception yang lolos dari sini jadi
+    // unhandled rejection yang CRASH seluruh proses watcher (insiden nyata pernah terjadi
+    // lewat jalur serupa di scheduleAutoStop()). Bungkus semuanya supaya bug apapun di sini
+    // paling parah cuma gagal 1 siklus, bukan mematikan watcher total.
+    try {
+      if (recorder.getActiveMeetingId() !== record.id) return; // sudah berhenti lebih dulu
 
-    const teamsRunning = isTeamsRunning();
-    const systemFile = state?.tempFiles?.system;
-    const activity = systemFile
-      ? hasRecentAudioActivity(systemFile, {
-          lookbackSeconds: minutes * 60,
-          thresholdDb: config.detection.silenceThresholdDb,
-        })
-      : null;
-    // Kalau belum bisa dicek (mode single, atau file belum cukup data), JANGAN anggap diam -
-    // lebih aman biarkan rekaman lanjut daripada salah membuang meeting yang asli.
-    const audioSilent = activity ? activity.isSilent : false;
+      const teamsRunning = isTeamsRunning();
+      const systemFile = state?.tempFiles?.system;
+      const activity = systemFile
+        ? hasRecentAudioActivity(systemFile, {
+            lookbackSeconds: minutes * 60,
+            thresholdDb: config.detection.silenceThresholdDb,
+          })
+        : null;
+      // Kalau belum bisa dicek (mode single, atau file belum cukup data), JANGAN anggap diam -
+      // lebih aman biarkan rekaman lanjut daripada salah membuang meeting yang asli.
+      const audioSilent = activity ? activity.isSilent : false;
 
-    if (!teamsRunning && audioSilent) {
-      await stopAndDiscardRecording(
-        record,
-        `Microsoft Teams tidak berjalan & tidak ada aktivitas audio meeting selama ${minutes} menit pertama - kemungkinan besar bukan meeting aktif.`
-      );
+      if (!teamsRunning && audioSilent) {
+        await stopAndDiscardRecording(
+          record,
+          `Microsoft Teams tidak berjalan & tidak ada aktivitas audio meeting selama ${minutes} menit pertama - kemungkinan besar bukan meeting aktif.`
+        );
+      }
+    } catch (err) {
+      logger.error(`scheduleSilenceCheck gagal untuk "${record.subject}": ${err.message}`);
     }
   }, checkInMs);
 }
@@ -103,18 +124,27 @@ function shouldExtendPastSchedule(endMs) {
  */
 function scheduleAutoStop(record, endMs, delayMs) {
   setTimeout(async () => {
-    if (recorder.getActiveMeetingId() !== record.id) return; // sudah berhenti lebih dulu
+    // Sama seperti scheduleSilenceCheck() - callback ini TIDAK dilindungi try/catch pemanggil
+    // manapun, jadi exception yang lolos = unhandled rejection = CRASH total proses watcher.
+    // Ini JALUR ASLI insiden nyata: finalizeRecording() gagal (ffmpeg SIGKILL sebelum sempat
+    // menutup file bersih) tanpa try/catch di sini menyebabkan watcher mati total sejak itu,
+    // semua meeting berikutnya tidak ter-rekam sampai di-restart manual.
+    try {
+      if (recorder.getActiveMeetingId() !== record.id) return; // sudah berhenti lebih dulu
 
-    if (shouldExtendPastSchedule(endMs)) {
-      const overtimeMin = Math.round((Date.now() - endMs) / 60000);
-      logger.info(
-        `Rapat "${record.subject}" sudah lewat jadwal selesai ${overtimeMin} menit tapi Teams masih berjalan - rekaman diperpanjang, dicek ulang ${config.watch.overtimeCheckIntervalMinutes} menit lagi.`
-      );
-      scheduleAutoStop(record, endMs, config.watch.overtimeCheckIntervalMinutes * 60 * 1000);
-      return;
+      if (shouldExtendPastSchedule(endMs)) {
+        const overtimeMin = Math.round((Date.now() - endMs) / 60000);
+        logger.info(
+          `Rapat "${record.subject}" sudah lewat jadwal selesai ${overtimeMin} menit tapi Teams masih berjalan - rekaman diperpanjang, dicek ulang ${config.watch.overtimeCheckIntervalMinutes} menit lagi.`
+        );
+        scheduleAutoStop(record, endMs, config.watch.overtimeCheckIntervalMinutes * 60 * 1000);
+        return;
+      }
+
+      await stopActiveRecording(record);
+    } catch (err) {
+      logger.error(`scheduleAutoStop gagal untuk "${record.subject}": ${err.message}`);
     }
-
-    await stopActiveRecording(record);
   }, delayMs);
 }
 
@@ -125,12 +155,26 @@ function scheduleAutoStop(record, endMs, delayMs) {
  */
 async function stopActiveRecording(record) {
   logger.info(`Waktu rapat "${record.subject}" selesai, menghentikan rekaman otomatis...`);
-  const state = recorder.stopRecording();
-  if (state) {
-    const finalAudioFile = await recorder.finalizeRecording(state);
-    if (finalAudioFile) {
-      db.updateMeeting(record.id, { audioFile: finalAudioFile });
+  try {
+    const state = recorder.stopRecording();
+    if (state) {
+      const finalAudioFile = await recorder.finalizeRecording(state);
+      if (finalAudioFile) {
+        db.updateMeeting(record.id, { audioFile: finalAudioFile });
+      }
     }
+  } catch (err) {
+    // finalizeRecording (gabung mic+system via ffmpeg) bisa gagal (mis. proses ffmpeg dipaksa
+    // SIGKILL sebelum sempat menutup file dengan bersih). Dipanggil dari setTimeout di
+    // scheduleAutoStop() yang TIDAK punya try/catch di level pemanggil - kalau exception ini
+    // lolos, promise reject-nya CRASH seluruh proses watcher (insiden nyata: watcher mati total
+    // sejak itu, semua meeting berikutnya tidak ter-rekam sampai di-restart manual). Tandai
+    // meeting error & JANGAN lanjut finishAndProcess (audio final belum berhasil dibuat) -
+    // audio mentah (belum digabung) tetap ada di data/recordings/ untuk pemulihan manual.
+    logger.error(`Gagal finalize rekaman "${record.subject}": ${err.message}`);
+    recordAlert({ level: "error", kind: "rekaman", meeting: record.subject, message: `Gagal finalize rekaman (audio mungkin tidak utuh): ${err.message}` });
+    db.updateMeeting(record.id, { status: "error", error: `Gagal finalize rekaman: ${err.message}` });
+    return;
   }
   await finishAndProcess(record.id);
 }
@@ -275,6 +319,7 @@ async function finishAndProcess(meetingId) {
     await runPipelineForMeeting(record);
   } catch (err) {
     logger.error(`Gagal memproses meeting ${record.subject}: ${err.message}`);
+    recordAlert({ level: "error", kind: "proses", meeting: record.subject, message: err.message });
     db.updateMeeting(meetingId, { status: "error", error: err.message });
   }
 }

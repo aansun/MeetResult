@@ -415,6 +415,10 @@ Kedua sinyal (Teams tidak jalan **dan** audio diam) harus sama-sama terpenuhi se
 
 > Proteksi ini **tidak berlaku** untuk rekam manual (`meetresult record`) — itu selalu keputusan eksplisit kamu.
 
+### Mac dicegah tidur saat merekam
+
+Selama ffmpeg merekam, MeetResult menahan Mac supaya tidak tidur (`caffeinate`, hanya macOS) — otomatis lepas begitu rekaman berhenti, bahkan kalau watcher crash. Ini mencegah rekaman terputus karena idle sleep (insiden nyata: audio hilang karena Mac tidur di tengah rapat). **Tidak bisa** mencegah tidur karena **laptop ditutup (lid)** — itu dipaksa macOS, jadi biarkan laptop terbuka (atau pakai monitor eksternal + charger). Matikan dengan `PREVENT_SLEEP_WHILE_RECORDING=false`.
+
 ### Peringatan kalau fetch kalender gagal berulang
 
 Watcher polling kalender Outlook tiap `WATCH_INTERVAL_MINUTES` (default 2 menit) — kalau fetch-nya gagal (mis. laptop sempat tidur/lepas WiFi berjam-jam tanpa disadari), sebelumnya ini cuma tercatat diam-diam di `data/watcher.log` dan baru ketahuan setelah ada meeting yang terlewat.
@@ -521,6 +525,12 @@ meetresult tray
 - **Stop** — hentikan rekaman manual, otomatis lanjut transkrip + generate MoM di background
 
 **Event List** — daftar meeting hari ini + status, klik yang sudah selesai untuk buka notulennya
+
+**Gagal Diproses (N)** — muncul otomatis kalau ada meeting (30 hari terakhir) yang error, atau macet di "processing" lebih dari 3 jam, dan **masih punya audio atau transkrip** di disk. Tiap meeting punya pilihan:
+- **Buat ulang notulen (pakai transkrip yang ada)** — tidak transkripsi ulang (hemat waktu & kuota), cocok kalau yang gagal cuma step notulen (mis. provider AI error/kuota habis)
+- **Transkrip ulang dari audio + notulen** — kalau transkripnya belum ada atau hasilnya jelek (butuh audio belum kena retensi 3 hari)
+
+Prosesnya jalan di background dan muncul notifikasi saat selesai/gagal. Dari terminal: `meetresult retry <meetingId>` (tambah `--transcribe` untuk paksa transkripsi ulang).
 
 **Pengaturan...** — jendela native (bukan edit `.env` manual), dengan menu navigasi di sisi kiri dan detail pengaturan di kanan (pola macOS System Settings). Ada 3 menu:
 - **Notulen** — Template MoM, Disusun oleh, Nama Organisasi (berlaku untuk semua skema template)
