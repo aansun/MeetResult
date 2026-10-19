@@ -59,6 +59,10 @@ function mapToTemplateData(momJson, meetingMeta, formatIndonesianDateLabel, prep
     return {
       no: r.no || i + 1,
       point: r.point || "-",
+      // Daftar sub-poin untuk template baru (tiap sub-poin = 1 paragraf dengan penomoran Word
+      // a, b, c... otomatis & indentasi gantung). subpointsText dipertahankan supaya template
+      // lama/kustom yang masih memakai {subpointsText} tetap jalan.
+      subpoints: subpoints.map((text) => ({ text })),
       subpointsText,
     };
   });

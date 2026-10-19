@@ -91,7 +91,7 @@ program
   .description(
     "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis, Bahasa Indonesia."
   )
-  .version("1.10.7");
+  .version("1.10.8");
 
 program
   .command("login")

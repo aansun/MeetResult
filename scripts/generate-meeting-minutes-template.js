@@ -20,6 +20,7 @@ const {
   AlignmentType,
   BorderStyle,
   ShadingType,
+  LevelFormat,
 } = require("docx");
 
 const BORDER = {
@@ -77,6 +78,29 @@ function infoRow(label, tag) {
 }
 
 const doc = new Document({
+  numbering: {
+    config: [
+      {
+        reference: "mom-resume",
+        levels: [
+          {
+            level: 0,
+            format: LevelFormat.DECIMAL,
+            text: "%1.",
+            alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: 426, hanging: 426 } }, run: { bold: true, size: 22 } },
+          },
+          {
+            level: 1,
+            format: LevelFormat.LOWER_LETTER,
+            text: "%2.",
+            alignment: AlignmentType.LEFT,
+            style: { paragraph: { indent: { left: 852, hanging: 426 } }, run: { size: 22 } },
+          },
+        ],
+      },
+    ],
+  },
   sections: [
     {
       properties: {
@@ -115,21 +139,31 @@ const doc = new Document({
           children: [new TextRun({ text: "Resume:", bold: true, size: 24, color: "000000" })],
         }),
 
-        // Loop narasi Resume: setiap item = 1 poin utama bernomor + sub-poin (a, b, c...)
-        // digabung dalam satu field "subpointsText" (baris baru otomatis dikonversi jadi line break).
-        // PENTING: tag buka {#resume} & tutup {/resume} WAJIB di paragraf terpisah (kosong) dari
-        // paragraf isi, agar docxtemplater menduplikasi seluruh blok paragraf dengan benar per item.
+        // Loop narasi Resume: setiap item = 1 poin utama (nomor Word otomatis 1, 2, 3...) dengan
+        // sub-poin di bawahnya (huruf Word otomatis a, b, c... yang mulai ulang di tiap poin
+        // utama - satu daftar bertingkat). Tiap sub-poin = 1 paragraf sendiri lewat loop
+        // {#subpoints}, jadi baris yang membungkus punya indentasi gantung (bukan teks biasa).
+        // PENTING: tag buka/tutup loop WAJIB di paragraf terpisah dari paragraf isi, agar
+        // docxtemplater menduplikasi paragraf isinya dengan benar per item.
         new Paragraph({
           children: [new TextRun({ text: "{#resume}", size: 2 })],
         }),
         new Paragraph({
-          spacing: { before: 120 },
-          children: [new TextRun({ text: "{no}. {point}", size: 22, bold: true })],
+          keepNext: true,
+          numbering: { reference: "mom-resume", level: 0 },
+          spacing: { before: 120, after: 60 },
+          children: [new TextRun({ text: "{point}", size: 22, bold: true })],
         }),
         new Paragraph({
-          indent: { left: 400 },
-          spacing: { after: 160 },
-          children: [new TextRun({ text: "{subpointsText}", size: 22 })],
+          children: [new TextRun({ text: "{#subpoints}", size: 2 })],
+        }),
+        new Paragraph({
+          numbering: { reference: "mom-resume", level: 1 },
+          spacing: { after: 60 },
+          children: [new TextRun({ text: "{text}", size: 22 })],
+        }),
+        new Paragraph({
+          children: [new TextRun({ text: "{/subpoints}", size: 2 })],
         }),
         new Paragraph({
           children: [new TextRun({ text: "{/resume}", size: 2 })],
