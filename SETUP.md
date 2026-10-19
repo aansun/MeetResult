@@ -415,6 +415,17 @@ Kedua sinyal (Teams tidak jalan **dan** audio diam) harus sama-sama terpenuhi se
 
 > Proteksi ini **tidak berlaku** untuk rekam manual (`meetresult record`) — itu selalu keputusan eksplisit kamu.
 
+### Meeting bentrok / berurutan mepet
+
+Mic & BlackHole hanya bisa merekam **1 meeting sekaligus**. Kalau ada meeting yang sudah waktunya mulai padahal rekaman lain masih berjalan, watcher memutuskan begini:
+
+| Situasi | Yang dilakukan |
+|---|---|
+| Meeting A **sudah lewat jadwal selesainya** (molor) dan meeting B sudah mulai | **Serah-terima**: rekaman A dipotong saat itu juga, A diproses (transkrip + notulen) di background, B langsung mulai direkam. Alasannya: A sudah lewat jadwal sementara B sudah mulai, hampir pasti Anda sudah pindah ke B. Muncul peringatan ⚠️ supaya Anda tahu rekaman dipecah di situ. |
+| Jadwal **benar-benar tumpang tindih** (A belum waktunya selesai) | Rekaman A **tidak diganggu** (tidak bisa tahu meeting mana yang Anda hadiri). B tetap `scheduled` dan otomatis mulai begitu A berhenti selama B belum berakhir. Muncul peringatan ⚠️ **sekali** bahwa B belum direkam. Mau merekam B sekarang? Hentikan rekaman yang berjalan dulu. |
+
+Dulu, kasus pertama membuat B tidak pernah terekam dan audionya menyatu di rekaman A (satu transkrip berisi dua meeting).
+
 ### Mac dicegah tidur saat merekam
 
 Selama ffmpeg merekam, MeetResult menahan Mac supaya tidak tidur (`caffeinate`, hanya macOS) — otomatis lepas begitu rekaman berhenti, bahkan kalau watcher crash. Ini mencegah rekaman terputus karena idle sleep (insiden nyata: audio hilang karena Mac tidur di tengah rapat). **Tidak bisa** mencegah tidur karena **laptop ditutup (lid)** — itu dipaksa macOS, jadi biarkan laptop terbuka (atau pakai monitor eksternal + charger). Matikan dengan `PREVENT_SLEEP_WHILE_RECORDING=false`.

@@ -153,8 +153,7 @@ function scheduleAutoStop(record, endMs, delayMs) {
  * pipeline transkrip+notulen. Dipakai baik oleh scheduleAutoStop() (fast path)
  * maupun oleh mekanisme reconcile di checkAndAct() (jaring pengaman).
  */
-async function stopActiveRecording(record) {
-  logger.info(`Waktu rapat "${record.subject}" selesai, menghentikan rekaman otomatis...`);
+async function finalizeActiveRecording(record) {
   try {
     const state = recorder.stopRecording();
     if (state) {
@@ -163,6 +162,7 @@ async function stopActiveRecording(record) {
         db.updateMeeting(record.id, { audioFile: finalAudioFile });
       }
     }
+    return true;
   } catch (err) {
     // finalizeRecording (gabung mic+system via ffmpeg) bisa gagal (mis. proses ffmpeg dipaksa
     // SIGKILL sebelum sempat menutup file dengan bersih). Dipanggil dari setTimeout di
@@ -174,9 +174,67 @@ async function stopActiveRecording(record) {
     logger.error(`Gagal finalize rekaman "${record.subject}": ${err.message}`);
     recordAlert({ level: "error", kind: "rekaman", meeting: record.subject, message: `Gagal finalize rekaman (audio mungkin tidak utuh): ${err.message}` });
     db.updateMeeting(record.id, { status: "error", error: `Gagal finalize rekaman: ${err.message}` });
+    return false;
+  }
+}
+
+async function stopActiveRecording(record) {
+  logger.info(`Waktu rapat "${record.subject}" selesai, menghentikan rekaman otomatis...`);
+  if (!(await finalizeActiveRecording(record))) return;
+  await finishAndProcess(record.id);
+}
+
+/**
+ * Meeting `record` sudah waktunya direkam, tapi masih ada rekaman LAIN yang berjalan (mic &
+ * BlackHole cuma bisa merekam 1 meeting sekaligus). Insiden nyata: meeting A molor lewat
+ * jadwal, meeting B (jadwal berikutnya) sudah mulai -> B tidak pernah terekam, audionya malah
+ * menyatu di rekaman A. Aturan:
+ *  1. A sudah LEWAT jadwal selesainya (overtime) -> serah-terima: rekaman A dipotong DI SINI,
+ *     A diproses (transkrip+notulen) di background, B langsung mulai direkam. Alasannya: A
+ *     sudah lewat jadwal sementara B sudah mulai, hampir pasti Anda sudah pindah ke B.
+ *  2. A MASIH dalam jadwalnya (jadwal benar-benar tumpang tindih) -> rekaman A TIDAK
+ *     diganggu (tidak bisa tahu meeting mana yang Anda hadiri). B tetap `scheduled` sehingga
+ *     otomatis mulai begitu A berhenti selama B belum berakhir, dan Anda diberi peringatan
+ *     SEKALI supaya tahu B belum direkam.
+ */
+async function handleRecordingConflict(record, startMs, now) {
+  const activeId = recorder.getActiveMeetingId();
+  const active = activeId ? db.getMeeting(activeId) : null;
+  if (!active || active.id === record.id) return;
+
+  const activeEndMs = active.end ? new Date(active.end).getTime() : null;
+  const activeIsOvertime = activeEndMs !== null && now >= activeEndMs;
+
+  if (activeIsOvertime) {
+    logger.warn(
+      `Rapat "${active.subject}" molor lewat jadwal & rapat "${record.subject}" sudah mulai - rekaman "${active.subject}" dipotong sekarang, lanjut merekam "${record.subject}".`
+    );
+    recordAlert({
+      level: "warning",
+      kind: "rekaman",
+      meeting: record.subject,
+      message: `"${active.subject}" molor melewati jadwal selesai & "${record.subject}" sudah dimulai - rekaman dipecah di sini: "${active.subject}" diproses sendiri, "${record.subject}" mulai direkam.`,
+    });
+    if (await finalizeActiveRecording(active)) {
+      // Proses transkrip+notulen A di background - JANGAN ditunggu supaya B tidak telat mulai
+      // (transkripsi bisa makan beberapa menit).
+      finishAndProcess(active.id).catch((err) =>
+        logger.error(`Gagal memproses "${active.subject}" setelah serah-terima: ${err.message}`)
+      );
+    }
     return;
   }
-  await finishAndProcess(record.id);
+
+  if (!record.conflictNotified) {
+    db.updateMeeting(record.id, { conflictNotified: true });
+    logger.warn(`Rapat "${record.subject}" bentrok dengan "${active.subject}" yang masih direkam - belum direkam.`);
+    recordAlert({
+      level: "warning",
+      kind: "rekaman",
+      meeting: record.subject,
+      message: `Jadwal bentrok: "${record.subject}" sudah waktunya mulai, tapi "${active.subject}" masih direkam (hanya 1 rekaman sekaligus). "${record.subject}" akan otomatis direkam begitu "${active.subject}" selesai kalau masih berlangsung. Untuk merekam yang ini, hentikan rekaman yang sedang berjalan.`,
+    });
+  }
 }
 
 async function checkAndAct() {
@@ -260,11 +318,11 @@ async function checkAndAct() {
         );
       }
 
-      const shouldStart =
-        record.status === "scheduled" &&
-        now >= startMs - leadMs &&
-        now < endMs &&
-        !recorder.isRecording();
+      const dueToStart = record.status === "scheduled" && now >= startMs - leadMs && now < endMs;
+      if (dueToStart && recorder.isRecording()) {
+        await handleRecordingConflict(record, startMs, now);
+      }
+      const shouldStart = dueToStart && !recorder.isRecording();
 
       if (shouldStart) {
         // Gate: kalau Teams sama sekali tidak berjalan saat jadwal mulai, kemungkinan besar
