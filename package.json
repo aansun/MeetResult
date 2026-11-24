@@ -1,7 +1,7 @@
 {
   "name": "meetresult",
-  "version": "1.10.8",
-  "description": "CLI untuk merekam, mentranskrip, dan merangkum rapat Microsoft Teams secara otomatis, terintegrasi dengan Outlook Calendar. Mendukung Bahasa Indonesia.",
+  "version": "1.10.9",
+  "description": "CLI and macOS menu-bar app that automatically records, transcribes, and writes minutes for Microsoft Teams meetings, integrated with Outlook Calendar. Supports Bahasa Indonesia.",
   "main": "src/cli.js",
   "repository": {
     "type": "git",

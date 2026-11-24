@@ -1,19 +1,42 @@
 const fs = require("fs");
 const { DB_FILE } = require("../config/config");
+const { withFsRetry } = require("../utils/fsRetry");
 
 function load() {
   if (!fs.existsSync(DB_FILE)) {
     return { meetings: [], settings: {} };
   }
+  let raw;
   try {
-    return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+    raw = withFsRetry(() => fs.readFileSync(DB_FILE, "utf-8"));
   } catch (e) {
-    return { meetings: [], settings: {} };
+    // JANGAN kembalikan database kosong di sini: pemanggil berikutnya (addMeeting/updateMeeting)
+    // akan save() hasil kosong itu dan MENIMPA seluruh riwayat meeting. Lebih baik gagal keras.
+    throw new Error(`Gagal membaca database ${DB_FILE}: ${e.message}`);
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.meetings)) throw new Error("struktur tidak valid");
+    return parsed;
+  } catch (e) {
+    // File ada tapi isinya rusak: simpan salinannya dulu (supaya bisa dipulihkan manual) baru
+    // gagal keras - jangan diam-diam diganti database kosong.
+    const backup = `${DB_FILE}.corrupt-${Date.now()}`;
+    try {
+      fs.writeFileSync(backup, raw, "utf-8");
+    } catch (_) {}
+    throw new Error(`Database rusak (${e.message}); salinan disimpan di ${backup}`);
   }
 }
 
 function save(db) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), "utf-8");
+  // Tulis ke file sementara lalu rename = atomik (tidak ada db.json setengah tertulis kalau
+  // proses mati di tengah), dan diulang kalau kena error file sementara (EPERM/EBUSY).
+  const tmp = `${DB_FILE}.tmp`;
+  withFsRetry(() => {
+    fs.writeFileSync(tmp, JSON.stringify(db, null, 2), "utf-8");
+    fs.renameSync(tmp, DB_FILE);
+  });
 }
 
 function addMeeting(meeting) {

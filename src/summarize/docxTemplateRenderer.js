@@ -4,6 +4,7 @@ const PizZip = require("pizzip");
 const Docxtemplater = require("docxtemplater");
 const config = require("../config/config");
 const { injectLogo } = require("./docxLogoInjector");
+const { withFsRetry } = require("../utils/fsRetry");
 
 /**
  * Cari file logo di folder Template/ (logo.jpeg / logo.jpg / logo.png).
@@ -12,11 +13,11 @@ const { injectLogo } = require("./docxLogoInjector");
  */
 function findLocalLogoPath() {
   if (process.env.MOM_LOGO_PATH) {
-    return path.resolve(config.ROOT_DIR, process.env.MOM_LOGO_PATH);
+    return path.resolve(config.HOME_DIR, process.env.MOM_LOGO_PATH);
   }
   const candidates = ["logo.jpeg", "logo.jpg", "logo.png"];
   for (const name of candidates) {
-    const p = path.join(config.ROOT_DIR, "Template", name);
+    const p = config.resolveTemplateFile(name);
     if (fs.existsSync(p)) return p;
   }
   return null;
@@ -38,7 +39,7 @@ function renderFromTemplate(templatePath, data, outputPath) {
     throw new Error(`Template tidak ditemukan: ${templatePath}`);
   }
 
-  const content = fs.readFileSync(templatePath, "binary");
+  const content = withFsRetry(() => fs.readFileSync(templatePath, "binary"));
   const zip = new PizZip(content);
 
   // Sisipkan/hapus placeholder logo SEBELUM docxtemplater memproses tag biasa,
@@ -53,7 +54,7 @@ function renderFromTemplate(templatePath, data, outputPath) {
   doc.render(data);
 
   const buffer = doc.getZip().generate({ type: "nodebuffer" });
-  fs.writeFileSync(outputPath, buffer);
+  withFsRetry(() => fs.writeFileSync(outputPath, buffer));
   return outputPath;
 }
 

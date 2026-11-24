@@ -11,8 +11,10 @@ const { hasRecentAudioActivity } = require("../utils/audioActivity");
 const { checkAndRepairClaudeCliSymlinks } = require("../utils/claudeCliHealth");
 const { updateWatcherMeta, readWatcherMeta } = require("../utils/watcherMeta");
 const { recordAlert } = require("../utils/alerts");
+const { inspectClaudeInstallations } = require("../utils/claudeBin");
 
 let stopTimer = null;
+let duplicateClaudeWarned = false;
 
 /**
  * Cek & perbaiki otomatis symlink `claude` CLI kalau rusak akibat Claude Desktop auto-update
@@ -26,6 +28,19 @@ function selfHealClaudeCliIfRelevant() {
     (config.ai.provider === "claude" || config.ai.fallbackProvider === "claude");
   if (!usesClaudeCli) return;
   checkAndRepairClaudeCliSymlinks();
+
+  // Dua instalasi `claude` berbeda berbagi kredensial Keychain dan bisa saling membatalkan
+  // login (sesi "OAuth expired" berulang) - beri tahu SEKALI per proses watcher.
+  if (!duplicateClaudeWarned) {
+    duplicateClaudeWarned = true;
+    try {
+      const info = inspectClaudeInstallations();
+      if (info.duplicate) {
+        logger.warn(info.warning);
+        recordAlert({ level: "warning", kind: "notulen", message: info.warning });
+      }
+    } catch (e) {}
+  }
 }
 
 /**

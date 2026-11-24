@@ -1,134 +1,164 @@
-# Setup & Panduan Lengkap MeetResult
+# MeetResult Setup & Complete Guide
 
-Dokumen ini berisi detail instalasi, konfigurasi, dan referensi pemakaian MeetResult. Untuk gambaran umum & tujuan aplikasi, lihat [README.md](README.md).
+This document covers installation, configuration, and usage reference for MeetResult. For an overview of what the app does, see [README.md](README.md).
 
-## Daftar Isi
+> **Language note:** this documentation is in English. The app itself (menu bar, Settings window, log messages) and the meeting minutes it generates are in Indonesian; where this guide mentions a menu or button, the Indonesian label is shown in **bold** with an English gloss the first time.
 
-- [1. Prasyarat](#1-prasyarat)
-- [2. Instalasi](#2-instalasi)
-- [3. Konfigurasi](#3-konfigurasi)
-- [4. Setup Provider AI untuk Notulen](#4-setup-provider-ai-untuk-notulen)
-- [5. Transkripsi via Gemini (opsional)](#5-transkripsi-via-gemini-opsional)
-- [6. Setup Kalender](#6-setup-kalender)
-- [7. Deteksi Meeting Aktif](#7-deteksi-meeting-aktif)
-- [8. Cara Pakai](#8-cara-pakai)
+## Table of Contents
+
+- [Quick Install (macOS app)](#quick-install-macos-app)
+- [1. Prerequisites](#1-prerequisites)
+- [2. Installation from Source](#2-installation-from-source)
+- [3. Configuration](#3-configuration)
+- [4. AI Provider Setup for Minutes](#4-ai-provider-setup-for-minutes)
+- [5. Transcription Providers and Accuracy](#5-transcription-providers-and-accuracy)
+- [6. Calendar Setup](#6-calendar-setup)
+- [7. Active Meeting Detection](#7-active-meeting-detection)
+- [8. Usage](#8-usage)
 - [9. Menu Bar App (macOS)](#9-menu-bar-app-macos)
-- [10. Update Aplikasi](#10-update-aplikasi)
-- [11. Struktur Data](#11-struktur-data)
-- [12. Template MoM](#12-template-mom)
-- [13. Performa untuk Meeting Panjang](#13-performa-untuk-meeting-panjang-2-jam)
-- [14. Catatan Penting](#14-catatan-penting)
+- [10. Updating the App](#10-updating-the-app)
+- [11. Data Layout](#11-data-layout)
+- [12. MoM Templates](#12-mom-templates)
+- [13. Performance for Long Meetings](#13-performance-for-long-meetings-2-hours)
+- [14. Important Notes](#14-important-notes)
 
-## 1. Prasyarat
+## Quick Install (macOS app)
+
+The easiest way to run MeetResult is the installer package — no Node.js, npm, or terminal needed.
+
+1. Download **`MeetResult-<version>.pkg`** from the [latest release](https://github.com/aansun/MeetResult/releases/latest).
+2. Double-click it and follow the installer. It places a self-contained **MeetResult.app** in `/Applications` (it bundles its own Node.js runtime).
+3. Open **MeetResult** from Launchpad. A menu-bar icon appears and the **Settings** window opens on the first launch — fill in your calendar link and pick your AI provider(s).
+4. If **ffmpeg** or the **BlackHole** audio driver is missing, the app says so and offers to install them for you through Homebrew (Terminal opens and runs `brew install ...`). These two are system components that cannot be bundled.
+5. Optional: menu bar → **Buka saat Login** (*Open at Login*) so the app starts with your Mac. When your calendar is configured, the app starts watching it automatically on every launch.
+
+**Good to know**
+
+- **Gatekeeper:** the installer and app are signed *ad hoc* (no Apple Developer ID), so macOS asks for a one-time approval. Right-click the `.pkg` → **Open**; for the app on first launch, right-click → **Open**, or use **System Settings → Privacy & Security → Open Anyway**.
+- **Requirements:** Apple Silicon (arm64) and macOS 13 or later.
+- **Where things live:** your settings (`.env`) and all data (audio, transcripts, minutes, database) are in `~/Library/Application Support/MeetResult` — deliberately outside iCloud-synced folders such as `~/Documents`, which can cause intermittent file-permission errors. The app itself is read-only inside `/Applications`.
+- **Local Whisper is optional.** Cloud transcription providers (Gemini, OpenAI, 9Router…) need nothing extra. For offline transcription install `whisper-ctranslate2` as described in [Prerequisites](#1-prerequisites).
+- **Updating:** menu bar → **Cek Update...** (*Check for Updates*) opens the download page when a newer installer exists. Run the new `.pkg`; your data and settings are untouched.
+- **Uninstalling:** delete `/Applications/MeetResult.app`; also delete `~/Library/Application Support/MeetResult` if you want to remove your data.
+- **Building the installer yourself:** `./scripts/build-installer.sh` produces `dist/MeetResult-<version>.pkg` (downloads the official Node.js runtime once and verifies its SHA-256 checksum).
+- **Terminal commands:** the installed app does not add a `meetresult` command to your shell. Everything is available from the menu bar; to run CLI commands use the bundled runtime, e.g. `MEETRESULT_HOME=~/Library/Application\ Support/MeetResult /Applications/MeetResult.app/Contents/Resources/node/bin/node /Applications/MeetResult.app/Contents/Resources/app/bin/meetresult.js list`.
+
+The rest of this guide describes running from a source checkout; all settings and behaviors below apply to the installed app too.
+
+## 1. Prerequisites
 
 - Node.js >= 18
 - ffmpeg (`brew install ffmpeg`)
-- Python + [whisper-ctranslate2](https://github.com/Softcatala/whisper-ctranslate2) untuk transkripsi (ringan & cepat, tanpa PyTorch, cocok untuk Apple Silicon):
+- Python + [whisper-ctranslate2](https://github.com/Softcatala/whisper-ctranslate2) for local transcription (lightweight and fast, no PyTorch, well suited to Apple Silicon):
   ```bash
   python3 -m pip install --user --upgrade pip
   python3 -m pip install --user -U whisper-ctranslate2
-  whisper-ctranslate2 --help   # cek berhasil terinstall
+  whisper-ctranslate2 --help   # verify the install
   ```
-  Model default: **`large-v3`** — paling akurat, terutama untuk nama/istilah khusus (lihat perbandingan nyata di bagian [13. Performa](#13-performa-untuk-meeting-panjang-2-jam)), tapi ~4x lebih lambat dari `medium` dan modelnya ~2x lebih besar (unduhan pertama kali ~2.9GB vs ~1.4GB). Gunakan `medium` kalau lebih mengutamakan kecepatan (mis. meeting sangat panjang/rutin), atau `small` untuk paling cepat dengan akurasi lebih rendah.
-- **macOS**: agar bisa merekam **audio sistem** (suara Teams, bukan cuma mic), install virtual audio device:
+  Default model: **`large-v3`** — the most accurate, especially for names and specialised terms (see the real comparison in [13. Performance](#13-performance-for-long-meetings-2-hours)), but about 4x slower than `medium` and about 2x larger (first download ~2.9 GB vs ~1.4 GB). Use `medium` if speed matters more (for example very long or routine meetings), or `small` for the fastest option at lower accuracy.
+- **macOS**: to record **system audio** (the Teams voices, not just your mic), install a virtual audio device:
   ```bash
   brew install blackhole-2ch
   ```
-  Lalu buat **Multi-Output Device** / **Aggregate Device** di `Audio MIDI Setup` yang menggabungkan speaker + BlackHole, dan set BlackHole sebagai output audio saat meeting agar tetap terdengar sekaligus terekam.
+  Then create a **Multi-Output Device** / **Aggregate Device** in `Audio MIDI Setup` that combines your speakers with BlackHole, and set it as the audio output during meetings so you can still hear while it records.
 
-## 2. Instalasi
+## 2. Installation from Source
 
-### Install dependency Node
+### Install Node dependencies
 
 ```bash
 cd MeetResult
 npm install
 ```
 
-### Daftarkan command `meetresult` secara global (WAJIB)
+### Register the `meetresult` command globally (REQUIRED)
 
-Supaya bisa jalankan `meetresult ...` dari terminal mana pun (bukan `node bin/meetresult.js ...`):
+So you can run `meetresult ...` from any terminal (instead of `node bin/meetresult.js ...`):
 
 ```bash
 npm link
-meetresult --version   # pastikan berhasil, tidak error "command not found"
+meetresult --version   # make sure it works, no "command not found" error
 ```
 
-> Kalau habis restart Mac / buka terminal baru muncul `zsh: command not found: meetresult`, biasanya karena langkah `npm link` ini belum pernah dijalankan di komputer tersebut — cukup jalankan sekali saja per komputer.
+> If after a Mac restart or a new terminal you see `zsh: command not found: meetresult`, it is usually because `npm link` was never run on that computer — run it once per computer.
 
-## 3. Konfigurasi
+## 3. Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-Isi `.env`:
+Fill in `.env`:
 
-| Variabel | Keterangan |
+| Variable | Description |
 |---|---|
-| `AZURE_CLIENT_ID` | Client ID App Registration Azure AD (lihat [Setup Kalender](#6-setup-kalender)) |
-| `AZURE_TENANT_ID` | `common` (default) atau tenant ID organisasi kamu |
-| `SUMMARY_PROVIDER` | Provider AI untuk notulen: `claude` (default), `openai`, atau `agy` (lihat [Setup Provider AI](#4-setup-provider-ai-untuk-notulen)) |
-| `CLAUDE_MODE` | `cli` (default, pakai Claude Code yang sudah login, TANPA API key) atau `api` (pakai Anthropic API, berbayar per token) |
-| `CLAUDE_CLI_BIN` | Nama/path binary Claude Code CLI (default `claude`) |
-| `ANTHROPIC_API_KEY` | Hanya dipakai jika `CLAUDE_MODE=api`. Dari https://console.anthropic.com/settings/keys |
-| `ANTHROPIC_MODEL` | Hanya dipakai jika `CLAUDE_MODE=api`. Default `claude-3-5-sonnet-latest` |
-| `OPENAI_BASE_URL` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Default OpenAI cloud, atau arahkan ke server lokal (oMLX/Ollama/LM Studio) |
-| `OPENAI_API_KEY` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Kosongkan untuk server lokal yang tidak butuh auth |
-| `OPENAI_MODEL` | Hanya dipakai jika `SUMMARY_PROVIDER=openai`. Nama model sesuai provider/server |
-| `AGY_CLI_BIN` / `AGY_MODEL` | Hanya dipakai jika `SUMMARY_PROVIDER=agy`. Lihat [Setup Provider AI](#4-setup-provider-ai-untuk-notulen) |
-| `TRANSCRIBE_PROVIDER` | `whisper` (default, lokal/offline) atau `gemini` (butuh internet, lihat [Transkripsi via Gemini](#5-transkripsi-via-gemini-opsional)) |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | Hanya dipakai jika `TRANSCRIBE_PROVIDER=gemini`. Dari https://aistudio.google.com/apikey |
-| `WHISPER_MODEL` | `small` / `medium` / `large` (makin besar makin akurat, makin lambat) |
-| `WHISPER_BATCHED` | `true` (default) - percepat transkripsi 2-4x, penting untuk meeting panjang |
-| `WHISPER_BATCH_SIZE` | Default `8`. Kecilkan ke `4` kalau RAM terbatas (≤8GB) |
-| `WHISPER_VAD_FILTER` | `true` (default) - skip bagian hening/silence, lebih cepat & akurat |
-| `WHISPER_LANGUAGE` | `id` untuk Bahasa Indonesia |
-| `FFMPEG_AUDIO_DEVICE_INDEX` | Index/nama device audio input (lihat `meetresult devices`) |
-| `AUDIO_RETENTION_DAYS` | Berapa hari file audio disimpan sebelum dihapus otomatis (default `3`) |
-| `MOM_PREPARED_BY` | Nama yang tercantum di kolom "Disusun oleh" pada dokumen MoM |
-| `MOM_ORG_NAME` | Nama program/organisasi opsional yang tampil sebagai subjudul dokumen |
-| `MOM_POLISH_LANGUAGE` | `true` (default) - haluskan bahasa notulen (lebih profesional/padat) lewat 1x panggilan AI tambahan, tanpa mengubah struktur/menghilangkan info |
+| `AZURE_CLIENT_ID` | Azure AD App Registration client ID (see [Calendar Setup](#6-calendar-setup)) |
+| `AZURE_TENANT_ID` | `common` (default) or your organization's tenant ID |
+| `SUMMARY_PROVIDER` | AI provider for the minutes: `claude` (default), `openai`, `agy`, `opencode`, or `ninerouter` (see [AI Provider Setup](#4-ai-provider-setup-for-minutes)) |
+| `SUMMARY_FALLBACK_PROVIDER` | Backup provider used when the main one fails (empty = disabled) |
+| `CLAUDE_MODE` | `cli` (default, uses the logged-in Claude Code, NO API key) or `api` (Anthropic API, pay per token) |
+| `CLAUDE_CLI_BIN` | Name/path of the Claude Code CLI binary (default `claude`) |
+| `ANTHROPIC_API_KEY` | Only used when `CLAUDE_MODE=api`. From https://console.anthropic.com/settings/keys |
+| `ANTHROPIC_MODEL` | Only used when `CLAUDE_MODE=api`. Default `claude-3-5-sonnet-latest` |
+| `OPENAI_BASE_URL` | Only used when `SUMMARY_PROVIDER=openai`. Defaults to OpenAI cloud, or point it at a local server (oMLX/Ollama/LM Studio) |
+| `OPENAI_API_KEY` | Only used when `SUMMARY_PROVIDER=openai`. Leave empty for local servers that need no auth |
+| `OPENAI_MODEL` | Only used when `SUMMARY_PROVIDER=openai`. Model name for your provider/server |
+| `AGY_CLI_BIN` / `AGY_MODEL` | Only used when `SUMMARY_PROVIDER=agy`. See [AI Provider Setup](#4-ai-provider-setup-for-minutes) |
+| `TRANSCRIBE_PROVIDER` | `whisper` (default, local/offline), `gemini`, `openai`, `openai-compatible`, or `ninerouter` (see [Transcription Providers](#5-transcription-providers-and-accuracy)) |
+| `TRANSCRIBE_FALLBACK_PROVIDER` | Backup transcription provider (recommended: `whisper` when the main one is cloud) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Only used when `TRANSCRIBE_PROVIDER=gemini`. Key from https://aistudio.google.com/apikey |
+| `WHISPER_MODEL` | `small` / `medium` / `large` (bigger = more accurate, slower) |
+| `WHISPER_BATCHED` | `true` (default) — speeds up transcription 2-4x, important for long meetings |
+| `WHISPER_BATCH_SIZE` | Default `8`. Lower to `4` on limited RAM (≤8 GB) |
+| `WHISPER_VAD_FILTER` | `true` (default) — skips silence, faster and more accurate |
+| `WHISPER_LANGUAGE` | `id` for Bahasa Indonesia |
+| `FFMPEG_AUDIO_DEVICE_INDEX` | Index/name of the audio input device (see `meetresult devices`) |
+| `AUDIO_RETENTION_DAYS` | Days to keep audio files before automatic deletion (default `3`) |
+| `PREVENT_SLEEP_WHILE_RECORDING` | `true` (default) — keeps the Mac awake while recording |
+| `MOM_PREPARED_BY` | Name shown in the "Disusun oleh" (*Prepared by*) field of the MoM document |
+| `MOM_ORG_NAME` | Optional programme/organization name shown as the document subtitle |
+| `MOM_POLISH_LANGUAGE` | `true` (default) — polishes the minutes' wording (more professional/concise) with one extra AI call, without changing structure or dropping information |
 
-Semua opsi di atas juga bisa diatur lewat window **Pengaturan** di menu bar app (lihat [bagian 9](#9-menu-bar-app-macos)), tanpa perlu edit `.env` manual.
+Every option above can also be set in the **Pengaturan** (*Settings*) window of the menu bar app (see [section 9](#9-menu-bar-app-macos)) without editing `.env` by hand.
 
-## 4. Setup Provider AI untuk Notulen
+## 4. AI Provider Setup for Minutes
 
-Step transkripsi (audio→teks) diatur terpisah — lihat [bagian 5](#5-transkripsi-via-gemini-opsional). Yang dijelaskan di sini adalah step **notulen** (teks transkrip → JSON MoM), lewat `SUMMARY_PROVIDER` di `.env`:
+The transcription step (audio → text) is configured separately — see [section 5](#5-transcription-providers-and-accuracy). This section covers the **minutes** step (transcript text → MoM JSON), selected with `SUMMARY_PROVIDER` in `.env`:
 
-| `SUMMARY_PROVIDER` | Cocok untuk |
+| `SUMMARY_PROVIDER` | Best for |
 |---|---|
-| `claude` (default) | Pakai Claude Code CLI (subscription, tanpa API key) atau Anthropic API |
-| `openai` | Pakai endpoint Chat Completions **OpenAI-compatible** — bisa **cloud** (OpenAI) atau **lokal** (oMLX, Ollama, LM Studio, vLLM, dll) |
-| `agy` | Pakai **Antigravity CLI** (Google, akses model Gemini) yang sudah login di mesin — subscription, tanpa API key terpisah |
-| `opencode` | Pakai **OpenCode CLI** (akses banyak model lewat OpenCode Zen/Go) yang sudah login di mesin — NOTULEN SAJA, bukan transkripsi |
-| `ninerouter` | Pakai gateway **9Router** ([github.com/decolua/9router](https://github.com/decolua/9router), lokal/remote, OpenAI-compatible) — satu key, banyak provider, auto-fallback |
+| `claude` (default) | Claude Code CLI (subscription, no API key) or the Anthropic API |
+| `openai` | An **OpenAI-compatible** Chat Completions endpoint — **cloud** (OpenAI) or **local** (oMLX, Ollama, LM Studio, vLLM, …) |
+| `agy` | **Antigravity CLI** (Google, Gemini models), already logged in on this Mac — subscription, no separate API key |
+| `opencode` | **OpenCode CLI** (many models through OpenCode Zen/Go), already logged in — minutes only, not transcription |
+| `ninerouter` | The **9Router** gateway ([github.com/decolua/9router](https://github.com/decolua/9router), local/remote, OpenAI-compatible) — one key, many providers, automatic fallback |
 
-> **Auto-deteksi saat install**: `npm install` otomatis mengecek apakah ada server AI lokal aktif — **oMLX** (baca port & API key langsung dari `~/.omlx/settings.json`, jadi otomatis TERMASUK autentikasinya), **Ollama** (`:11434`), atau **LM Studio** (`:1234`). Kalau ketemu, `.env` langsung di-set `SUMMARY_PROVIDER=openai` + `OPENAI_BASE_URL` (+ `OPENAI_API_KEY` untuk oMLX) yang sesuai. Kalau server lokal baru dinyalakan setelah install, jalankan ulang deteksinya kapan saja:
+> **Auto-detection on install**: `npm install` checks whether a local AI server is running — **oMLX** (reads the port and API key straight from `~/.omlx/settings.json`, so authentication is included), **Ollama** (`:11434`), or **LM Studio** (`:1234`). If one is found, `.env` is set to `SUMMARY_PROVIDER=openai` with the matching `OPENAI_BASE_URL` (plus `OPENAI_API_KEY` for oMLX). If you start a local server after installing, re-run detection any time:
 > ```bash
 > meetresult setup-ai
 > ```
-> Konfigurasi yang sudah pernah di-set manual tidak akan ditimpa kecuali pakai `meetresult setup-ai --force`.
+> Anything you already set manually is not overwritten unless you use `meetresult setup-ai --force`.
 
-Setelah konfigurasi diisi, verifikasi provider/model benar-benar bisa dipakai (tanpa bikin file/rekaman) dengan:
+After filling in the configuration, verify that **every configured model** really works (no files or recordings are created):
 ```bash
 meetresult test-ai
 ```
+(or the **Test** button in Settings — see [Testing all models and provider resilience](#testing-all-models-and-provider-resilience)).
 
-### Opsi A — `openai` dengan server LOKAL (privasi, gratis, offline)
+### Option A — `openai` with a LOCAL server (private, free, offline)
 
-1. Jalankan server OpenAI-compatible pilihanmu, misalnya:
-   - **oMLX** (Apple Silicon, https://omlx.app): jalankan app-nya, server otomatis aktif sesuai `~/.omlx/settings.json` (default port `8000`, butuh API key - lihat langkah 2)
-   - **Ollama**: `ollama serve` lalu `ollama pull llama3.1` (default port `11434`, tanpa API key)
-   - **LM Studio**: nyalakan "Local Server" dari app-nya (default port `1234`, tanpa API key)
-2. Jalankan `meetresult setup-ai` (atau install ulang) agar `.env` otomatis terisi (untuk oMLX, API key ikut otomatis terbaca), atau isi manual:
+1. Start the OpenAI-compatible server of your choice, for example:
+   - **oMLX** (Apple Silicon, https://omlx.app): start the app; the server comes up per `~/.omlx/settings.json` (default port `8000`, needs an API key — see step 2)
+   - **Ollama**: `ollama serve`, then `ollama pull llama3.1` (default port `11434`, no API key)
+   - **LM Studio**: enable "Local Server" in the app (default port `1234`, no API key)
+2. Run `meetresult setup-ai` (or reinstall) so `.env` is filled automatically (for oMLX the API key is picked up too), or fill it in manually:
    ```
    SUMMARY_PROVIDER=openai
    OPENAI_BASE_URL=http://localhost:11434/v1
    OPENAI_MODEL=llama3.1
    ```
 
-### Opsi B — `openai` dengan cloud (OpenAI atau provider OpenAI-compatible lain)
+### Option B — `openai` with the cloud (OpenAI or another OpenAI-compatible provider)
 
 ```
 SUMMARY_PROVIDER=openai
@@ -137,587 +167,627 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 ```
 
-### Opsi C — `claude` (mode CLI — default, direkomendasikan)
+### Option C — `claude` (CLI mode — default, recommended)
 
-MeetResult bisa memakai **Claude Code CLI** yang sudah login dengan subscription kamu (Pro/Max/Team), sehingga **tidak perlu bayar API terpisah**.
+MeetResult can use the **Claude Code CLI** logged in with your subscription (Pro/Max/Team), so you **do not pay for a separate API**.
 
-1. Pastikan Claude Code CLI terinstall & ada di PATH sebagai `claude`:
+1. Make sure the Claude Code CLI is installed and on your PATH as `claude`:
    ```bash
    claude --version
    ```
-   Jika belum ada di PATH tapi kamu punya Claude Desktop app, binary-nya biasanya ada di:
+   If it is not on your PATH but you have the Claude Desktop app, the binary is usually at:
    ```
-   ~/Library/Application Support/Claude/claude-code/<versi>/claude.app/Contents/MacOS/claude
+   ~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app/Contents/MacOS/claude
    ```
-   Buat symlink agar mudah dipanggil:
+   Create a symlink so it is easy to call:
    ```bash
-   ln -sf "$HOME/Library/Application Support/Claude/claude-code/<versi>/claude.app/Contents/MacOS/claude" /opt/homebrew/bin/claude
+   ln -sf "$HOME/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app/Contents/MacOS/claude" /opt/homebrew/bin/claude
    ```
-2. Login (interaktif, sekali saja):
+   (The watcher also repairs a broken or missing `claude` symlink automatically after Claude Desktop updates.)
+2. Log in (interactive, once):
    ```bash
-   claude setup-token   # rekomendasi: token jangka panjang untuk automasi background
-   # atau
+   claude setup-token   # recommended: long-lived token for background automation
+   # or
    claude auth login
    ```
-3. Cek status:
+3. Check the status:
    ```bash
    claude auth status
    ```
-4. Di `.env`, pastikan:
+4. In `.env`, make sure:
    ```
    CLAUDE_MODE=cli
    CLAUDE_CLI_BIN=claude
    ```
 
-> Alternatif: set `CLAUDE_MODE=api` dan isi `ANTHROPIC_API_KEY` jika ingin pakai Anthropic API langsung (dikenakan biaya per token, tidak pakai subscription Claude Code).
+> **Keep only one `claude` installation on your PATH.** A standalone install (for example `~/.local/bin/claude`) and the one bundled with Claude Desktop share the same Keychain credentials and can invalidate each other's login, which shows up as a repeating `OAuth session expired` error. MeetResult warns you when it finds two, and the model test shows which binary is used. Always log in with that exact binary (`<path> auth login`).
 
-### Opsi D — `agy` (Antigravity CLI, akses model Gemini)
+> Alternative: set `CLAUDE_MODE=api` and fill in `ANTHROPIC_API_KEY` to use the Anthropic API directly (billed per token, does not use your Claude Code subscription).
 
-[Antigravity](https://antigravity.google) adalah CLI resmi Google untuk akses model Gemini (mirip pola Claude Code CLI di atas) — MeetResult shell-out ke binary `agy` yang sudah kamu install & login sendiri, **bukan** reverse-engineer OAuth/spoofing.
+### Option D — `agy` (Antigravity CLI, Gemini models)
 
-1. Install & login Antigravity CLI sesuai panduan resminya, pastikan `agy` ada di PATH:
+[Antigravity](https://antigravity.google) is Google's official CLI for Gemini models (the same pattern as the Claude Code CLI above) — MeetResult shells out to the `agy` binary that you installed and logged in yourself; it does **not** reverse-engineer OAuth or spoof anything.
+
+1. Install and log in to the Antigravity CLI following its official guide, and make sure `agy` is on your PATH:
    ```bash
    agy --version
    ```
-2. Cek kamu sudah login & lihat model yang tersedia:
+2. Check that you are logged in and see the available models:
    ```bash
    agy models
    ```
-3. Di `.env`:
+3. In `.env`:
    ```
    SUMMARY_PROVIDER=agy
    AGY_CLI_BIN=agy
-   AGY_MODEL=gemini-3.5-flash-low
+   AGY_MODEL=gemini-3.8-flash-high
    ```
-   Kosongkan `AGY_MODEL` untuk pakai model default sesi yang sedang login.
+   Leave `AGY_MODEL` empty to use the default model of the logged-in session. Model names change over time — if `agy` reports `invalid model selection`, run `agy models` and update `AGY_MODEL`.
 
-> Catatan teknis: `agy` menerima prompt lewat **argumen command**, bukan stdin (beda dari Claude CLI) — MeetResult sudah menangani ini otomatis, cuma relevan kalau kamu ingin tahu cara kerjanya.
+> Technical note: `agy` receives the prompt as a **command argument**, not via stdin (unlike the Claude CLI) — MeetResult handles this automatically. If the Google login expires, `agy` asks for an interactive login; MeetResult detects that within about a second, reports it as a warning in the menu bar, and does not wait on it.
 
-### Opsi E — `opencode` (OpenCode CLI, akses banyak model - NOTULEN SAJA)
+### Option E — `opencode` (OpenCode CLI, many models — MINUTES ONLY)
 
-[OpenCode](https://opencode.ai) adalah CLI agent coding yang bisa akses banyak model (Claude, GPT, Gemini, dll) lewat layanan OpenCode Zen/Go — MeetResult shell-out ke binary `opencode` yang sudah kamu install & login sendiri.
+[OpenCode](https://opencode.ai) is a coding-agent CLI that can reach many models (Claude, GPT, Gemini, …) through the OpenCode Zen/Go services — MeetResult shells out to the `opencode` binary that you installed and logged in yourself.
 
-1. Install & login OpenCode CLI sesuai panduan resminya, pastikan `opencode` ada di PATH:
+1. Install and log in to the OpenCode CLI following its official guide, and make sure `opencode` is on your PATH:
    ```bash
    opencode --version
    opencode providers login
    ```
-2. Cek daftar model yang tersedia:
+2. List the available models:
    ```bash
    opencode models
    ```
-3. Di `.env`:
+3. In `.env`:
    ```
    SUMMARY_PROVIDER=opencode
    OPENCODE_CLI_BIN=opencode
    OPENCODE_MODEL=opencode/gemini-3.7-flash
    ```
-   Format `OPENCODE_MODEL` WAJIB `provider/model` (mis. `opencode/gemini-3.7-flash` atau `opencode-go/kimi-k3`). Kosongkan untuk pakai default OpenCode.
+   `OPENCODE_MODEL` MUST use the `provider/model` format (for example `opencode/gemini-3.7-flash` or `opencode-go/kimi-k3`). Leave it empty to use OpenCode's default.
 
-> **PENTING - kenapa OpenCode TIDAK dipakai untuk transkripsi audio**: OpenCode adalah agent coding dengan akses shell, bukan API teks/audio biasa. Diuji langsung: attachment file audio (`-f audio.wav`) gagal dengan error "Cannot read binary file" - dan begitu gagal, model mencoba menjalankan perintah shell sendiri di mesin (mis. `which whisper`, `ffprobe`) untuk mencari cara lain menyelesaikan tugas. Ini aman untuk prompt teks biasa (notulen), tapi TIDAK aman untuk pipeline otomatis yang memproses audio tanpa pengawasan - karena itu OpenCode cuma tersedia sebagai provider **notulen**, tidak muncul di pilihan provider transkripsi.
+> **IMPORTANT — why OpenCode is NOT used for audio transcription**: OpenCode is a coding agent with shell access, not a plain text/audio API. Tested directly: attaching an audio file (`-f audio.wav`) fails with "Cannot read binary file", and after failing the model tries to run shell commands on the machine (for example `which whisper`, `ffprobe`) to find another way to finish the task. That is fine for ordinary text prompts (minutes) but NOT safe for an unattended pipeline that processes audio — so OpenCode is offered only as a **minutes** provider and does not appear in the transcription provider list.
 
-### Opsi F — `ninerouter` (9Router, gateway multi-provider)
+### Option F — `ninerouter` (9Router, multi-provider gateway)
 
-[9Router](https://github.com/decolua/9router) adalah gateway OpenAI-compatible lokal/remote yang mengumpulkan banyak provider AI (OpenAI, Anthropic, Gemini, Groq, dll) di balik **satu URL + satu API key**, dengan auto-fallback antar akun. MeetResult memanggilnya lewat endpoint resmi `/v1/chat/completions`.
+[9Router](https://github.com/decolua/9router) is a local/remote OpenAI-compatible gateway that gathers many AI providers (OpenAI, Anthropic, Gemini, Groq, …) behind **one URL and one API key**, with automatic fallback between accounts. MeetResult calls it through the official `/v1/chat/completions` endpoint.
 
-1. Jalankan/siapkan instance 9Router-mu (lokal atau remote/tunnel), catat URL-nya (mis. `http://localhost:20128`) dan API key dari Dashboard → Keys (kalau instance-nya mengaktifkan `requireApiKey`).
-2. Cek daftar model chat yang tersedia:
+1. Start/prepare your 9Router instance (local or remote/tunnel) and note its URL (for example `http://localhost:20128`) and the API key from Dashboard → Keys (if the instance enables `requireApiKey`).
+2. List the available chat models:
    ```bash
    curl $NINEROUTER_URL/v1/models | jq '.data[].id'
    ```
-3. Di `.env`, atau lewat menu tray **Pengaturan**:
+3. In `.env`, or through the **Pengaturan** (*Settings*) window:
    ```
    SUMMARY_PROVIDER=ninerouter
    NINEROUTER_URL=http://localhost:20128
    NINEROUTER_API_KEY=...
    NINEROUTER_MODEL=openai/gpt-5
    ```
-   Format `NINEROUTER_MODEL` WAJIB `provider/model` (id persis dari `/v1/models`). Di menu tray, tombol ↻ di sebelah field Model mengambil daftar ini otomatis.
+   `NINEROUTER_MODEL` MUST use the `provider/model` format (the exact `id` from `/v1/models`). In the Settings window, the ↻ button next to the Model field fetches this list for you.
 
-> **Penting - "Invalid model format"**: kalau muncul error ini, artinya `NINEROUTER_MODEL` tidak persis sama dengan salah satu `id` di `GET <NINEROUTER_URL>/v1/models` - cek ulang lewat tombol ↻ atau curl di atas, jangan menebak formatnya manual.
+> **Note — "Invalid model format"**: if you get this error, `NINEROUTER_MODEL` does not exactly match one of the `id` values from `GET <NINEROUTER_URL>/v1/models` — re-check with the ↻ button or the curl command above instead of guessing the format.
 
-### Provider Backup (Fallback) untuk Notulen
+### Backup (Fallback) Provider for Minutes
 
-Kalau provider utama gagal (error teknis, kuota habis, dll), MeetResult bisa otomatis mencoba ulang lewat provider backup, supaya notulen tetap berhasil dibuat. Atur lewat menu tray **Pengaturan** ("Provider Fallback") atau `.env`:
+When the main provider fails (technical error, exhausted quota, an empty or invalid response, …), MeetResult can automatically retry through a backup provider so the minutes still get written. Configure it in the **Pengaturan** window ("Provider Fallback") or in `.env`:
 
 ```
 SUMMARY_PROVIDER=agy
 SUMMARY_FALLBACK_PROVIDER=claude
 ```
 
-Kosongkan `SUMMARY_FALLBACK_PROVIDER` untuk nonaktifkan (default). Kalau primary DAN fallback sama-sama gagal, error dari keduanya digabung di pesan errornya supaya jelas penyebabnya.
+Leave `SUMMARY_FALLBACK_PROVIDER` empty to disable it (default). If both the primary AND the fallback fail, both errors are combined in the final message so the cause is clear.
 
-Field Mode/Model provider (Claude, OpenAI, Antigravity) di menu tray Pengaturan otomatis muncul kalau provider itu dipakai di **salah satu peran** - baik sebagai provider utama MAUPUN sebagai fallback. Contoh: kalau `SUMMARY_PROVIDER=agy` dan `SUMMARY_FALLBACK_PROVIDER=claude`, field Mode Claude/Model Claude tetap kelihatan & bisa diisi walau Claude bukan provider utama - supaya kamu bisa pastikan model yang dipakai saat fallback benar-benar aktif, bukan cuma default kosong.
+The Mode/Model fields of a provider (Claude, OpenAI, Antigravity) in the Settings window appear automatically whenever that provider is used in **either role** — as primary or as fallback. For example, with `SUMMARY_PROVIDER=agy` and `SUMMARY_FALLBACK_PROVIDER=claude`, the Claude Mode/Model fields stay visible and editable even though Claude is not the primary, so you can make sure the model used during a fallback is really configured rather than an empty default.
 
-## 5. Akurasi Transkripsi: Local (Whisper) vs Cloud (Gemini/OpenAI)
+### Testing all models and provider resilience
 
-Provider transkripsi (`TRANSCRIBE_PROVIDER`) bisa dipilih dari menu tray **Pengaturan** atau langsung di `.env`. Ada 4 pilihan - 3 di antaranya sudah diverifikasi lewat tes nyata di audio yang sama (podcast padat istilah Arab/Islami, lihat tabel di bawah):
+The **Test** button in Settings (or `meetresult test-ai`) tests **every** model you filled in, one at a time and **without letting a fallback rescue it**: minutes (primary and fallback) with a small transcript, and transcription (primary and fallback) with **real spoken audio** (an Indonesian voice generated by macOS `say`) containing marker names. The result is a ✅/⚠️/❌ list per model, with the actual error text and the fix. The test can take a few minutes (Whisper loads its local model).
 
-| Provider | `TRANSCRIBE_PROVIDER` | Lokasi proses | Butuh internet | Akurasi istilah khusus (hasil tes nyata) |
+When minutes are generated, the watcher handles provider failures like this:
+- An **empty or non-JSON response** counts as a failure -> the fallback is tried right away (it used to slip through and blow up later as "Gagal parse JSON").
+- **Transient problems** (network, 503, empty) are retried once after 30 seconds (`AI_TRANSIENT_RETRIES`, `AI_TRANSIENT_RETRY_DELAY_MS`).
+- An **expired login** (agy/claude) is not retried: it fails immediately with the login command and a warning in the menu bar. `agy` asking for an interactive Google login no longer hangs for 60 seconds.
+- **Two different `claude` installations on PATH** (for example `~/.local/bin` and the Claude Desktop one) share Keychain credentials and can invalidate each other's login — the watcher warns once, and the test result shows which binary is used.
+- A `db.json` or template that is briefly inaccessible (EPERM/EBUSY — common in iCloud-managed folders or under macOS folder-permission checks) is retried several times; the database is never silently replaced by an empty one if it cannot be read.
+
+## 5. Transcription Providers and Accuracy
+
+The transcription provider (`TRANSCRIBE_PROVIDER`) can be chosen in the **Pengaturan** window or directly in `.env`. There are 5 choices — the first three were verified with a real test on the same audio (a podcast dense with Arabic/Islamic terms, see the table below):
+
+| Provider | `TRANSCRIBE_PROVIDER` | Where it runs | Needs internet | Accuracy on specialised terms (real test result) |
 |---|---|---|---|---|
-| **Whisper** (default) | `whisper` | Lokal (mesin sendiri) | Tidak | Baik untuk kalimat umum; model `large-v3` (default) memperbaiki sebagian kesalahan istilah khusus dibanding `medium`, tidak semua |
-| **Gemini** | `gemini` | Cloud (Google) | Ya | **Terbaik** - benar 100% untuk semua istilah uji (nama tokoh, istilah Arab) |
-| **OpenAI** | `openai` | Cloud (OpenAI resmi) | Ya | Lebih baik dari Whisper `medium`, tapi masih ada kesalahan di istilah yang sangat spesifik |
-| **Custom (OpenAI-compatible)** | `openai-compatible` | Server milik sendiri (lokal/custom) | Tergantung server | Belum diverifikasi - tergantung model di server tsb |
-| **9Router** | `ninerouter` | Gateway lokal/remote (banyak provider) | Ya | Tergantung provider STT yang dipasang di instance-nya |
+| **Whisper** (default) | `whisper` | Local (your machine) | No | Good for general sentences; the `large-v3` model (default) fixes some specialised-term mistakes compared with `medium`, but not all |
+| **Gemini** | `gemini` | Cloud (Google) | Yes | **Best** — 100% correct on every test term (names, Arabic terms) |
+| **OpenAI** | `openai` | Cloud (official OpenAI) | Yes | Better than Whisper `medium`, but still some mistakes on very specific terms |
+| **Custom (OpenAI-compatible)** | `openai-compatible` | Your own server (local/custom) | Depends on the server | Not verified — depends on the model on that server |
+| **9Router** | `ninerouter` | Local/remote gateway (many providers) | Yes | Depends on the STT provider installed on that instance |
 
-**Kapan pakai Cloud (Gemini/OpenAI)**: kalau tidak mau install Whisper secara lokal, mesin lambat/RAM terbatas, atau butuh akurasi maksimal untuk konten dengan istilah/nama khusus (asing, Arab, dsb). **Trade-off**: butuh koneksi internet, dan audio meeting terkirim ke server pihak ketiga (Google/OpenAI) - beda dari Whisper yang 100% lokal.
+**When to use the cloud (Gemini/OpenAI)**: when you do not want to install Whisper locally, your machine is slow or short on RAM, or you need maximum accuracy for content with specialised terms or names (foreign, Arabic, etc.). **Trade-off**: it needs an internet connection and the meeting audio is sent to a third-party server (Google/OpenAI) — unlike Whisper, which is 100% local.
 
-**Kapan pakai Custom (OpenAI-compatible)**: kalau punya server transkripsi audio sendiri (lokal/self-hosted) yang expose endpoint bentuk OpenAI Audio Transcriptions (`POST /audio/transcriptions`) - mis. hasil deploy sendiri, bukan OpenAI. Provider ini **sengaja dipisah** dari `openai` (OpenAI cloud resmi) di atas supaya konfigurasi keduanya (Base URL/API Key/Model) tidak tertukar - kedua provider ini bahkan bisa aktif bersamaan dengan peran berbeda (mis. `openai` sebagai utama, `openai-compatible` sebagai fallback, atau sebaliknya).
+**When to use Custom (OpenAI-compatible)**: when you run your own transcription server (local/self-hosted) that exposes an OpenAI Audio Transcriptions-shaped endpoint (`POST /audio/transcriptions`) — for example one you deployed yourself, not OpenAI. This provider is **deliberately separate** from `openai` (official OpenAI cloud) so the two configurations (Base URL/API Key/Model) never get mixed up — both can even be active at the same time in different roles (for example `openai` as primary and `openai-compatible` as fallback, or the reverse).
 
-### Setup Gemini (opsional)
+### Gemini setup (optional)
 
-1. Dapatkan API key di https://aistudio.google.com/apikey
-2. Cek nama model **audio-capable** terbaru di Google AI Studio (nama model Gemini berubah dari waktu ke waktu, jadi sengaja tidak ada default bawaan di MeetResult)
-3. Isi lewat menu tray **Pengaturan**, atau langsung di `.env`:
+1. Get an API key at https://aistudio.google.com/apikey
+2. Check the latest **audio-capable** model name in Google AI Studio (Gemini model names change over time, so MeetResult deliberately ships no default). In the Settings window, the ↻ button next to Model lists the models available to your key.
+3. Fill it in through the **Pengaturan** (*Settings*) window, or directly in `.env`:
    ```
    TRANSCRIBE_PROVIDER=gemini
    GEMINI_API_KEY=...
    GEMINI_MODEL=...
    ```
+4. Gemini enforces a per-minute request limit (some tiers allow only 15 requests/minute). When a request fails, MeetResult retries up to 3 times with a 60-second pause between attempts (never in a tight loop), and only then falls back to your fallback provider. Tune it with `GEMINI_TRANSCRIBE_MAX_RETRIES` and `GEMINI_TRANSCRIBE_RETRY_DELAY_MS`.
 
-### Setup OpenAI (opsional)
+### OpenAI setup (optional)
 
-Provider ini mengirim audio ke server **OpenAI cloud resmi**.
+This provider sends audio to the **official OpenAI cloud**.
 
-1. Dapatkan API key di https://platform.openai.com/api-keys
-2. Isi lewat menu tray **Pengaturan**, atau langsung di `.env`:
+1. Get an API key at https://platform.openai.com/api-keys
+2. Fill it in through the **Pengaturan** window, or directly in `.env`:
    ```
    TRANSCRIBE_PROVIDER=openai
    OPENAI_TRANSCRIBE_API_KEY=...
    OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe
    ```
-   > `OPENAI_TRANSCRIBE_API_KEY`/`OPENAI_TRANSCRIBE_BASE_URL` SENGAJA terpisah dari `OPENAI_API_KEY`/`OPENAI_BASE_URL` yang dipakai untuk notulen (`SUMMARY_PROVIDER=openai`) - base URL notulen sering diarahkan ke server LOKAL (oMLX/Ollama/LM Studio) yang tidak punya endpoint audio, sedangkan base URL transkripsi ini defaultnya OpenAI cloud asli dan jarang perlu diubah.
+   > `OPENAI_TRANSCRIBE_API_KEY`/`OPENAI_TRANSCRIBE_BASE_URL` are deliberately separate from `OPENAI_API_KEY`/`OPENAI_BASE_URL`, which are used for minutes (`SUMMARY_PROVIDER=openai`) — the minutes base URL often points at a LOCAL server (oMLX/Ollama/LM Studio) that has no audio endpoint, whereas the transcription base URL defaults to the real OpenAI cloud and rarely needs changing.
 
-Setelah diisi, jalankan `meetresult transcribe <file.wav>` untuk tes, atau tombol **Test** di Pengaturan.
+After filling it in, run `meetresult transcribe <file.wav>` to test it, or use the **Test** button in Settings.
 
-> Provider transkripsi ini terpisah dari provider notulen (`SUMMARY_PROVIDER`) - kamu bisa campur, misalnya transkripsi pakai Gemini tapi notulen tetap pakai Claude, atau sebaliknya.
+> Model guidance from a real test on the same Indonesian meeting clip: `gpt-4o-transcribe` was the most reliable (it got both technical terms right), `whisper-1` was close but garbled one acronym, and `gpt-4o-mini-transcribe` was the weakest (it misheard a person's name). Gemini `gemini-3.6-flash` got all four key terms right in that test.
 
-### Setup Custom OpenAI-compatible (opsional)
+> The transcription provider is separate from the minutes provider (`SUMMARY_PROVIDER`) — you can mix them, for example Gemini for transcription and Claude for minutes, or the reverse.
 
-Untuk server transkripsi **milik sendiri** (lokal/self-hosted, bukan OpenAI) yang expose endpoint bentuk OpenAI Audio Transcriptions (`POST /audio/transcriptions`). **Sengaja provider terpisah** dari `openai` di atas - jadi Base URL/API Key/Model keduanya tidak pernah tertukar, dan kamu bisa pakai kedua provider ini sekaligus (mis. satu jadi utama, satu jadi fallback).
+### Custom OpenAI-compatible setup (optional)
 
-1. Isi lewat menu tray **Pengaturan**, atau langsung di `.env`:
+For a transcription server that **you run yourself** (local/self-hosted, not OpenAI) and that exposes an OpenAI Audio Transcriptions-shaped endpoint (`POST /audio/transcriptions`). It is a **deliberately separate provider** from `openai` above — so the Base URL/API Key/Model of the two never get mixed up, and you can use both at once (for example one as primary and one as fallback).
+
+1. Fill it in through the **Pengaturan** window, or directly in `.env`:
    ```
    TRANSCRIBE_PROVIDER=openai-compatible
    OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL=http://localhost:8000/v1
    OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY=
    OPENAI_COMPATIBLE_TRANSCRIBE_MODEL=
    ```
-   `OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL` **wajib diisi manual** (tidak ada default) - tidak ada asumsi server mana yang dituju. `OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY` boleh dikosongkan kalau server tidak butuh autentikasi, dan `OPENAI_COMPATIBLE_TRANSCRIBE_MODEL` boleh dikosongkan kalau servernya cuma punya 1 model dan mengabaikan parameter ini.
+   `OPENAI_COMPATIBLE_TRANSCRIBE_BASE_URL` is **required** and has no default — no assumption is made about which server you mean. `OPENAI_COMPATIBLE_TRANSCRIBE_API_KEY` may stay empty if the server needs no authentication, and `OPENAI_COMPATIBLE_TRANSCRIBE_MODEL` may stay empty if the server has a single model and ignores the parameter.
 
-Di menu tray **Pengaturan**, tombol ↻ di sebelah field Model akan mengambil daftar model langsung dari `<Base URL>/models` endpoint yang sedang diisi (setara `meetresult models --scope transcribe` di CLI) - berguna untuk cek endpoint custom benar-benar aktif dan lihat ID model yang tersedia di sana.
+In the **Pengaturan** window, the ↻ button next to the Model field fetches the model list straight from `<Base URL>/models` of the endpoint you entered (the CLI equivalent is `meetresult models --scope transcribe`) — handy to confirm that a custom endpoint is really up and to see the model IDs it offers.
 
-Setelah diisi, jalankan `meetresult transcribe <file.wav>` untuk tes, atau tombol **Test** di Pengaturan.
+After filling it in, run `meetresult transcribe <file.wav>` to test it, or use the **Test** button in Settings.
 
-### Setup 9Router untuk Transkripsi (opsional)
+### 9Router setup for transcription (optional)
 
-[9Router](https://github.com/decolua/9router) juga punya endpoint speech-to-text (`POST /v1/audio/transcriptions`), lewat provider akun Whisper/Groq/Gemini/Deepgram/AssemblyAI/NVIDIA/HuggingFace yang terpasang di instance-mu. **Sengaja provider terpisah** dari `ninerouter` untuk notulen (lihat [Opsi F](#opsi-f--ninerouter-9router-gateway-multi-provider) di atas) - URL/API key/model kedua peran ini tidak pernah tertukar, walau sama-sama 9Router.
+[9Router](https://github.com/decolua/9router) also has a speech-to-text endpoint (`POST /v1/audio/transcriptions`), served by whichever Whisper/Groq/Gemini/Deepgram/AssemblyAI/NVIDIA/HuggingFace provider accounts you have installed on your instance. It is a **deliberately separate provider** from the `ninerouter` minutes provider (see [Option F](#option-f--ninerouter-9router-multi-provider-gateway) above) — the URL/API key/model of the two roles never get mixed up, even though both use 9Router.
 
-1. Cek daftar model **khusus speech-to-text** (BEDA dari daftar model chat `/v1/models` di atas):
+1. List the **speech-to-text** models (DIFFERENT from the chat model list at `/v1/models` above):
    ```bash
    curl $NINEROUTER_URL/v1/models/stt | jq '.data[].id'
    ```
-   > Kalau daftar ini KOSONG, artinya instance 9Router-mu belum punya akun provider STT terpasang sama sekali - tambahkan dulu di Dashboard 9Router (mis. akun OpenAI/Groq untuk Whisper) sebelum lanjut, apa pun model yang kamu coba kirim akan ditolak selama daftar ini kosong.
-2. Di `.env`, atau lewat menu tray **Pengaturan**:
+   > If this list is EMPTY, your 9Router instance has no STT provider account installed at all — add one first in the 9Router dashboard (for example an OpenAI/Groq account for Whisper). Whatever model you send will be rejected while this list is empty.
+2. In `.env`, or through the **Pengaturan** window:
    ```
    TRANSCRIBE_PROVIDER=ninerouter
    NINEROUTER_TRANSCRIBE_URL=http://localhost:20128
    NINEROUTER_TRANSCRIBE_API_KEY=...
    NINEROUTER_TRANSCRIBE_MODEL=openai/whisper-1
    ```
-   Format `NINEROUTER_TRANSCRIBE_MODEL` WAJIB `provider/model`, id persis dari `/v1/models/stt` (BUKAN dari `/v1/models` biasa). Di menu tray, tombol ↻ di sebelah field Model mengambil daftar ini otomatis.
+   `NINEROUTER_TRANSCRIBE_MODEL` MUST use the `provider/model` format, the exact id from `/v1/models/stt` (NOT from the ordinary `/v1/models`). In the Settings window, the ↻ button next to Model fetches this list for you.
 
-Setelah diisi, jalankan `meetresult transcribe <file.wav>` untuk tes, atau tombol **Test** di Pengaturan.
+After filling it in, run `meetresult transcribe <file.wav>` to test it, or use the **Test** button in Settings.
 
-### Bantu Whisper mengenali istilah/nama khusus (kalau tetap pakai lokal)
+### Helping Whisper recognise names and specialised terms (if you stay local)
 
-Whisper cukup akurat untuk kalimat umum, tapi **sering salah untuk nama tokoh dan istilah asing/Arab** yang jarang muncul di data latihnya (mis. nama ulama, judul kitab) - kadang sampai mengganti dengan kata yang bunyinya mirip tapi maknanya jauh berbeda. Kalau konten kamu banyak istilah spesifik seperti ini, isi `.env`:
+Whisper is accurate on general sentences, but it **often gets personal names and foreign/Arabic terms wrong** when they are rare in its training data (for example scholars' names or book titles) — sometimes replacing them with a word that sounds similar but means something very different. If your content has many such terms, set in `.env`:
 
 ```
 WHISPER_HOTWORDS=Taqiyuddin an-Nabhani, Al-Khaliq, khilafah, kaffah, Rib'i bin Amir
 ```
 
-Ini membantu **signifikan** (terverifikasi: 4 dari 7 istilah bermasalah langsung terkoreksi di sebuah tes nyata), tapi **tidak menjamin 100% benar** - istilah yang bunyinya sangat mirip kata umum lain (mis. nama Allah "Al-Khaliq" vs kata "alkoholik") kadang tetap salah walau sudah dikasih hint. Untuk akurasi maksimal di konten seperti ini, `TRANSCRIBE_PROVIDER=gemini` di atas terbukti paling konsisten benar.
+This helps **significantly** (verified: 4 of 7 problem terms were corrected right away in a real test), but it **does not guarantee 100%** — terms that sound very much like another common word (for example the name of God "Al-Khaliq" versus the word "alkoholik") are sometimes still wrong even with a hint. For maximum accuracy on content like this, `TRANSCRIBE_PROVIDER=gemini` above proved the most consistently correct.
 
-### Model Whisper belum terunduh?
+### Whisper model not downloaded yet?
 
-Model `WHISPER_MODEL` (mis. `large-v3`) diunduh **otomatis** dari Hugging Face saat pertama kali dipakai untuk transkripsi - tidak perlu langkah manual. Kalau ingin mengunduh lebih dulu (supaya rekaman pertama tidak menunggu unduhan), menu tray **Pengaturan** menampilkan status model (sudah/belum terunduh) dengan tombol **Unduh** untuk memicu unduhan sekarang, atau lewat terminal:
+The `WHISPER_MODEL` model (for example `large-v3`) is downloaded **automatically** from Hugging Face the first time it is used for transcription — no manual step is needed. To download it ahead of time (so the first recording does not wait on a download), the **Pengaturan** window shows the model status (downloaded or not) with a **Unduh** (*Download*) button, or use the terminal:
 
 ```bash
-meetresult whisper-status --model large-v3   # cek status
-meetresult whisper-download --model large-v3 # unduh sekarang
+meetresult whisper-status --model large-v3   # check the status
+meetresult whisper-download --model large-v3 # download now
 ```
 
-### Provider Backup (Fallback) untuk Transkripsi
+### Backup (Fallback) Provider for Transcription
 
-Kalau provider transkripsi utama gagal (error teknis, kuota API habis, internet putus, dll), MeetResult bisa otomatis mencoba ulang lewat provider backup, supaya transkripsi tetap berhasil dibuat. Atur lewat menu tray **Pengaturan** ("Fallback Transkripsi") atau `.env`:
+If the main transcription provider fails (technical error, exhausted API quota, lost internet, …), MeetResult can automatically retry through a backup provider so the transcript still gets produced. Configure it in the **Pengaturan** window ("Fallback Transkripsi") or in `.env`:
 
 ```
 TRANSCRIBE_PROVIDER=gemini
 TRANSCRIBE_FALLBACK_PROVIDER=whisper
 ```
 
-**Rekomendasi**: kalau provider utama cloud (Gemini/OpenAI), pakai `whisper` sebagai fallback — karena Whisper lokal tidak pernah kehabisan kuota/koneksi, transkripsi hampir pasti berhasil walau cloud sedang bermasalah. Kosongkan `TRANSCRIBE_FALLBACK_PROVIDER` untuk nonaktifkan (default).
+**Recommendation**: when the main provider is cloud (Gemini/OpenAI), use `whisper` as the fallback — local Whisper never runs out of quota or connection, so transcription almost certainly succeeds even when the cloud is having problems. Leave `TRANSCRIBE_FALLBACK_PROVIDER` empty to disable it (default).
 
-**Model Whisper khusus untuk fallback**: kalau fallback-nya `whisper`, kamu bisa pakai model yang BEDA dari `WHISPER_MODEL` biasa lewat `WHISPER_FALLBACK_MODEL` (atau field "Model Whisper (Fallback)" di menu tray Pengaturan) - berguna kalau mau model utama paling akurat (mis. `large-v3`) tapi fallback darurat pakai model lebih cepat (mis. `medium`), supaya skenario cloud-down tidak ikut menunggu lama. Kosongkan untuk pakai model yang sama seperti `WHISPER_MODEL`.
+**A dedicated Whisper model for the fallback**: if the fallback is `whisper`, you can use a model DIFFERENT from the regular `WHISPER_MODEL` through `WHISPER_FALLBACK_MODEL` (or the "Model Whisper (Fallback)" field in the Settings window) — useful when you want the most accurate main model (for example `large-v3`) but a faster emergency fallback (for example `medium`), so a cloud outage does not also mean a long wait. Leave it empty to use the same model as `WHISPER_MODEL`.
 
 ```
 WHISPER_MODEL=large-v3
 WHISPER_FALLBACK_MODEL=medium
 ```
 
-## 6. Setup Kalender
+## 6. Calendar Setup
 
-MeetResult mendukung 2 cara membaca kalender Outlook. Set lewat `CALENDAR_MODE` di `.env`.
+MeetResult supports two ways to read your Outlook calendar. Set it with `CALENDAR_MODE` in `.env`.
 
-### Mode A — `ics` (default, PALING MUDAH, tanpa Azure App)
+### Mode A — `ics` (default, EASIEST, no Azure app)
 
-Tidak perlu bikin aplikasi Azure/login OAuth apa pun. Kamu hanya perlu "publish" kalender:
+No Azure application or OAuth login is needed. You only have to "publish" your calendar:
 
-1. Buka **Outlook Web** (outlook.office.com atau outlook.com)
-2. Klik **Settings ⚙️** → **Calendar** → **Shared calendars**
-3. Pilih kalender kamu → **Publish a calendar**
-4. Permission: pilih **"Can view all details"** (bukan "Can view when I'm busy", agar judul & lokasi meeting ikut terbaca)
-5. Klik **Publish**, lalu copy link yang formatnya **ICS** (bukan HTML)
-6. Paste ke `.env`:
+1. Open **Outlook Web** (outlook.office.com or outlook.com)
+2. Click **Settings ⚙️** → **Calendar** → **Shared calendars**
+3. Pick your calendar → **Publish a calendar**
+4. Permission: choose **"Can view all details"** (not "Can view when I'm busy", so meeting titles and locations are readable)
+5. Click **Publish**, then copy the link in **ICS** format (not HTML)
+6. Paste it into `.env`:
    ```
    CALENDAR_MODE=ics
    CALENDAR_ICS_URL=https://outlook.office365.com/owa/calendar/xxxxxxxx/calendar.ics
    ```
-7. Selesai — **tidak perlu** `meetresult login`, langsung bisa `meetresult agenda` / `meetresult watch`
+7. Done — **no** `meetresult login` is needed; you can go straight to `meetresult agenda` / `meetresult watch`
 
-> Catatan: Outlook biasanya menyegarkan feed ICS ini setiap ~15–30 menit (bukan real-time), link join Teams diambil dari isi deskripsi/lokasi event, dan data **organizer/peserta tidak tersedia** di feed publish (dibatasi Microsoft untuk privasi) — jika butuh data ini lengkap, gunakan Mode B (`graph`).
+> Note: Outlook usually refreshes this ICS feed every ~15–30 minutes (not real time), the Teams join link is taken from the event's description/location, and **organizer/attendee data is not available** in the published feed (restricted by Microsoft for privacy) — if you need that data in full, use Mode B (`graph`).
 
-### Mode B — `graph` (real-time, butuh Azure App Registration)
+### Mode B — `graph` (real time, needs an Azure App Registration)
 
-Gunakan jika butuh deteksi jadwal lebih real-time / data lebih lengkap.
+Use it if you need more real-time schedule detection or more complete data.
 
-1. Buka https://portal.azure.com → **Azure Active Directory** → **App registrations** → **New registration**
-2. Nama: `MeetResult`, Supported account types: sesuai kebutuhan (Single/Multi tenant)
-3. Tidak perlu Redirect URI (aplikasi ini pakai **Device Code Flow**), tapi jika diminta, tambahkan platform **Mobile and desktop applications** dengan URI `https://login.microsoftonline.com/common/oauth2/nativeclient`
-4. Di **Authentication**, aktifkan **Allow public client flows** = Yes
-5. Di **API permissions**, tambahkan Microsoft Graph (Delegated): `Calendars.Read`, `User.Read`, `OnlineMeetings.Read`
-6. Copy **Application (client) ID** → masukkan ke `AZURE_CLIENT_ID`, dan set `CALENDAR_MODE=graph`
-7. Untuk akun kantor (Office 365 organisasi), izin `Calendars.Read` biasanya tidak butuh admin consent, tapi tergantung kebijakan IT masing-masing perusahaan
-8. Jalankan `meetresult login` sebelum pakai `agenda`/`watch`
+1. Open https://portal.azure.com → **Azure Active Directory** → **App registrations** → **New registration**
+2. Name: `MeetResult`, Supported account types: as needed (Single/Multi tenant)
+3. No Redirect URI is needed (the app uses the **Device Code Flow**), but if asked, add the platform **Mobile and desktop applications** with the URI `https://login.microsoftonline.com/common/oauth2/nativeclient`
+4. Under **Authentication**, enable **Allow public client flows** = Yes
+5. Under **API permissions**, add Microsoft Graph (Delegated): `Calendars.Read`, `User.Read`, `OnlineMeetings.Read`
+6. Copy the **Application (client) ID** into `AZURE_CLIENT_ID`, and set `CALENDAR_MODE=graph`
+7. For work accounts (Office 365 organizations), the `Calendars.Read` permission usually does not need admin consent, but it depends on each company's IT policy
+8. Run `meetresult login` before using `agenda`/`watch`
 
-## 7. Deteksi Meeting Aktif
+## 7. Active Meeting Detection
 
-Auto-record dipicu murni berdasarkan **jadwal kalender** (jam mulai–selesai), BUKAN status call Teams yang sebenarnya. Kalau event kalender masih ada tapi meeting-nya sebenarnya di-cancel/reschedule/tidak jadi, tanpa proteksi ini mic akan tetap merekam apapun yang terjadi di dekatnya selama window jadwal tersebut — termasuk percakapan pribadi di luar meeting.
+Auto-record is triggered purely by the **calendar schedule** (start–end time), NOT by the actual Teams call state. If a calendar event still exists but the meeting was actually cancelled, rescheduled, or never happened, then without protection the mic keeps recording whatever happens nearby during that scheduled window — including private conversations outside any meeting.
 
-Dua lapis proteksi otomatis aktif secara default:
+Two layers of protection are on by default:
 
-1. **Cek Teams berjalan sebelum mulai** (`REQUIRE_TEAMS_RUNNING=true`, default) — kalau aplikasi Microsoft Teams sama sekali tidak dibuka saat jadwal mulai, auto-record dibatalkan (meeting ditandai status `skipped`).
-2. **Cek ulang aktivitas audio setelah beberapa menit** (`SILENCE_CHECK_AFTER_MINUTES=5`, default) — kalau di menit ke-5 Teams TIDAK berjalan **dan** channel audio system (BlackHole, suara lawan bicara) diam total sejak mulai rekam, rekaman dihentikan otomatis dan **tidak diproses** (skip transkrip+notulen, hemat biaya AI & mencegah percakapan pribadi ikut dirangkum). File audio & transkrip yang sudah sempat terekam tetap disimpan (ikut retensi normal) untuk referensi manual kalau ternyata false-positive.
+1. **Check that Teams is running before starting** (`REQUIRE_TEAMS_RUNNING=true`, default) — if the Microsoft Teams application is not open at all when the schedule starts, auto-record is cancelled (the meeting is marked `skipped`).
+2. **Re-check audio activity after a few minutes** (`SILENCE_CHECK_AFTER_MINUTES=5`, default) — if at minute 5 Teams is NOT running **and** the system audio channel (BlackHole, the other participants' voices) has been completely silent since recording began, the recording is stopped automatically and **not processed** (transcript and minutes are skipped, saving AI cost and keeping private conversations out of the summary). Any audio and transcript already captured are kept (following normal retention) for manual reference in case it was a false positive.
 
-Kedua sinyal (Teams tidak jalan **dan** audio diam) harus sama-sama terpenuhi sebelum rekaman dihentikan — supaya meeting asli yang cuma hening di awal (nunggu peserta join, dsb) tidak salah dibuang. Set salah satu ke `false`/`0` di `.env` untuk menonaktifkan.
+Both signals (Teams not running **and** audio silent) must hold before a recording is stopped — so a genuine meeting that is merely quiet at the start (waiting for participants to join, etc.) is not discarded by mistake. Set either one to `false`/`0` in `.env` to disable it.
 
-> Proteksi ini **tidak berlaku** untuk rekam manual (`meetresult record`) — itu selalu keputusan eksplisit kamu.
+> This protection does **not** apply to manual recording (`meetresult record`) — that is always your explicit decision.
 
-### Meeting bentrok / berurutan mepet
+### Overrunning and back-to-back meetings
 
-Mic & BlackHole hanya bisa merekam **1 meeting sekaligus**. Kalau ada meeting yang sudah waktunya mulai padahal rekaman lain masih berjalan, watcher memutuskan begini:
+The mic and BlackHole can record **only one meeting at a time**. When a meeting reaches its start time while another recording is still running, the watcher decides as follows:
 
-| Situasi | Yang dilakukan |
+| Situation | What happens |
 |---|---|
-| Meeting A **sudah lewat jadwal selesainya** (molor) dan meeting B sudah mulai | **Serah-terima**: rekaman A dipotong saat itu juga, A diproses (transkrip + notulen) di background, B langsung mulai direkam. Alasannya: A sudah lewat jadwal sementara B sudah mulai, hampir pasti Anda sudah pindah ke B. Muncul peringatan ⚠️ supaya Anda tahu rekaman dipecah di situ. |
-| Jadwal **benar-benar tumpang tindih** (A belum waktunya selesai) | Rekaman A **tidak diganggu** (tidak bisa tahu meeting mana yang Anda hadiri). B tetap `scheduled` dan otomatis mulai begitu A berhenti selama B belum berakhir. Muncul peringatan ⚠️ **sekali** bahwa B belum direkam. Mau merekam B sekarang? Hentikan rekaman yang berjalan dulu. |
+| Meeting A is **past its scheduled end** (overran) and meeting B has started | **Hand-off**: A's recording is cut right then, A is processed (transcript + minutes) in the background, and B starts recording immediately. Reasoning: A is already past its slot while B has started, so you have almost certainly moved on to B. A ⚠️ warning tells you the recording was split there. |
+| The schedules **genuinely overlap** (A is not due to end yet) | A's recording is **left alone** (there is no way to know which meeting you are attending). B stays `scheduled` and starts automatically as soon as A stops, as long as B has not ended. A ⚠️ warning appears **once** to say B is not being recorded. To record B now, stop the running recording first. |
 
-Dulu, kasus pertama membuat B tidak pernah terekam dan audionya menyatu di rekaman A (satu transkrip berisi dua meeting).
+Previously the first case meant B was never recorded and its audio ended up merged into A's recording (one transcript containing two meetings).
 
-### Mac dicegah tidur saat merekam
+### The Mac is kept awake while recording
 
-Selama ffmpeg merekam, MeetResult menahan Mac supaya tidak tidur (`caffeinate`, hanya macOS) — otomatis lepas begitu rekaman berhenti, bahkan kalau watcher crash. Ini mencegah rekaman terputus karena idle sleep (insiden nyata: audio hilang karena Mac tidur di tengah rapat). **Tidak bisa** mencegah tidur karena **laptop ditutup (lid)** — itu dipaksa macOS, jadi biarkan laptop terbuka (atau pakai monitor eksternal + charger). Matikan dengan `PREVENT_SLEEP_WHILE_RECORDING=false`.
+While ffmpeg is recording, MeetResult keeps the Mac from sleeping (`caffeinate`, macOS only) — released automatically when the recording ends, even if the watcher crashes. This prevents recordings being cut off by idle sleep (a real incident: audio was lost because the Mac slept mid-meeting). It **cannot** prevent sleep caused by **closing the laptop lid** — macOS forces that — so keep the lid open (or use an external display plus power). Disable it with `PREVENT_SLEEP_WHILE_RECORDING=false`.
 
-### Peringatan kalau fetch kalender gagal berulang
+### Warning when calendar fetches keep failing
 
-Watcher polling kalender Outlook tiap `WATCH_INTERVAL_MINUTES` (default 2 menit) — kalau fetch-nya gagal (mis. laptop sempat tidur/lepas WiFi berjam-jam tanpa disadari), sebelumnya ini cuma tercatat diam-diam di `data/watcher.log` dan baru ketahuan setelah ada meeting yang terlewat.
+The watcher polls your Outlook calendar every `WATCH_INTERVAL_MINUTES` (default 2 minutes). If a fetch fails (for example the laptop slept or lost Wi-Fi for hours unnoticed), this used to be logged silently in `data/watcher.log` and only discovered after a meeting was missed.
 
-Sekarang kalau fetch kalender gagal **3 kali berturut-turut**, muncul notifikasi macOS sekali + baris peringatan di menu tray (Watch submenu): "⚠️ Kalender gagal fetch Nx - cek internet". Notifikasi cuma sekali per insiden (tidak spam tiap 2 menit) dan otomatis hilang begitu fetch berhasil lagi.
+Now, when calendar fetches fail **3 times in a row**, a macOS notification appears once, plus a warning line in the menu bar app (Watch submenu): "⚠️ Kalender gagal fetch Nx - cek internet" (*calendar fetch failed Nx — check internet*). The notification fires once per incident (no spam every 2 minutes) and the line disappears as soon as a fetch succeeds again.
 
-## 8. Cara Pakai
+## 8. Usage
 
-### Login ke Outlook
+### Log in to Outlook
 
 ```bash
 meetresult login
 ```
-Ikuti instruksi kode device yang muncul (buka browser, masukkan kode). Hanya diperlukan untuk `CALENDAR_MODE=graph`.
+Follow the device-code instructions that appear (open the browser, enter the code). Only needed for `CALENDAR_MODE=graph`.
 
-### Cek device audio (sekali di awal, untuk setting `.env`)
+### Check audio devices (once at the start, to set up `.env`)
 
 ```bash
 meetresult devices
 ```
 
-### Deteksi ulang server AI lokal untuk notulen (oMLX/Ollama/LM Studio)
+### Re-detect a local AI server for minutes (oMLX/Ollama/LM Studio)
 
 ```bash
 meetresult setup-ai
 ```
 
-### Cek daftar model & verifikasi provider AI
+### List models and verify AI providers
 
 ```bash
-meetresult models      # daftar model tersedia untuk provider aktif
-meetresult test-ai      # kirim transkrip kecil, pastikan provider/model benar-benar bekerja
+meetresult models      # models available for the active provider
+meetresult test-ai     # test every configured model (minutes + transcription, primary + fallback)
 ```
 
-### Lihat agenda meeting Teams
+### View the Teams meeting agenda
 
 ```bash
-meetresult agenda --minutes 1440   # 1 hari ke depan
+meetresult agenda --minutes 1440   # the next day
 ```
 
-### Mode otomatis (rekomendasi) — jalankan di background/terminal terpisah
+### Automatic mode (recommended) — run in the background / a separate terminal
 
 ```bash
 meetresult watch
 ```
-Aplikasi akan memantau kalender setiap beberapa menit, otomatis mulai rekam saat meeting Teams dimulai, dan otomatis berhenti + transkrip + buat notulen saat meeting selesai.
+The app watches the calendar every few minutes, starts recording automatically when a Teams meeting begins, and automatically stops, transcribes, and writes the minutes when the meeting ends.
 
-**Kalau meeting molor dari jadwal kalender** (mis. dijadwalkan 30 menit tapi diskusi masih berlangsung), rekaman **tidak langsung dipotong** di waktu jadwal - watcher cek dulu apakah Microsoft Teams masih berjalan. Kalau masih, rekaman diperpanjang otomatis & dicek ulang tiap `MEETING_OVERTIME_CHECK_INTERVAL_MINUTES` (default 3 menit) sampai Teams ditutup, maksimal `MAX_MEETING_OVERTIME_MINUTES` (default 120 menit) di atas jadwal selesai sebagai jaring pengaman.
+**If a meeting overruns its calendar slot** (for example scheduled for 30 minutes but the discussion continues), the recording is **not cut at the scheduled time** — the watcher first checks whether Microsoft Teams is still running. If it is, the recording is extended automatically and re-checked every `MEETING_OVERTIME_CHECK_INTERVAL_MINUTES` (default 3 minutes) until Teams is closed, with `MAX_MEETING_OVERTIME_MINUTES` (default 120 minutes) past the scheduled end as a safety net.
 
-### Rekam manual
+### Manual recording
 
 ```bash
-meetresult record --name "Sync Mingguan Tim"
-# ... setelah meeting selesai ...
+meetresult record --name "Weekly Team Sync"
+# ... after the meeting ends ...
 meetresult stop
 ```
 
-### Proses manual dari file audio yang sudah ada
+### Process an existing audio file manually
 
 ```bash
-meetresult process rekaman.wav --title "Rapat Anggaran Q4"
+meetresult process recording.wav --title "Q4 Budget Meeting"
 ```
 
-### Transkrip & ringkas terpisah
+### Transcribe and summarize separately
 
 ```bash
 meetresult transcribe data/recordings/xxxx.wav
-meetresult summarize data/transcripts/xxxx.txt --title "Rapat Anggaran Q4"
-meetresult summarize data/transcripts/xxxx.txt --title "..." --model <id>   # override model sekali proses
+meetresult summarize data/transcripts/xxxx.txt --title "Q4 Budget Meeting"
+meetresult summarize data/transcripts/xxxx.txt --title "..." --model <id>   # override the model for one run
 ```
 
-### Lihat daftar & hasil notulen
+### Retry a failed meeting
+
+```bash
+meetresult retry <meetingId>              # redo from the furthest step still possible (transcript exists -> only the minutes)
+meetresult retry <meetingId> --transcribe # force a fresh transcription from the audio
+```
+
+### View the list and results of the minutes
 
 ```bash
 meetresult list
-meetresult show <meetingId>          # tampilkan ringkasan di terminal
-meetresult show <meetingId> --open   # sekaligus buka file .docx di Word
+meetresult show <meetingId>          # show the summary in the terminal
+meetresult show <meetingId> --open   # also open the .docx file in Word
 ```
 
-### Bersihkan file audio lama secara manual (opsional)
+### Clean up old audio files manually (optional)
 
 ```bash
 meetresult cleanup
 ```
-Secara default ini juga berjalan otomatis setiap hari jam 03:00 saat `meetresult watch` aktif.
+By default this also runs automatically every day at 03:00 while `meetresult watch` is active.
 
 ## 9. Menu Bar App (macOS)
 
-Ada indikator menu bar native (icon **"MR"**) supaya kamu bisa lihat status MeetResult sekilas, tanpa buka terminal:
+A native menu bar indicator (icon **"MR"**) lets you see MeetResult's status at a glance without opening a terminal. (The installed app starts it automatically; from a source checkout use:)
 
 ```bash
 meetresult tray
 ```
 
-- 🟢 Hijau = Watch aktif standby, 🔴 Merah = sedang merekam otomatis, 🟡 Kuning = sedang merekam manual, ⚪ Abu-abu = semua berhenti
+- 🟢 Green = Watch active on standby, 🔴 Red = recording automatically, 🟡 Yellow = recording manually, ⚪ Grey = everything stopped. A ⚠️ next to "MR" means there are unread warnings (or the code/config changed since the watcher started).
 
-**Menu Watch (mode otomatis via kalender):**
-- **Start** / **Stop** — kontrol watcher (setara `meetresult watch`)
-- **Restart Watch** — restart manual watcher kapan saja (mis. setelah ubah `.env` manual di luar Pengaturan)
-- Badge ⚠️ otomatis muncul kalau kode/konfigurasi berubah sejak watcher terakhir start, dengan opsi restart langsung
+**Watch menu (automatic mode via the calendar):**
+- **Start** / **Stop** — control the watcher (equivalent to `meetresult watch`)
+- **Restart Watch** — restart the watcher manually at any time (for example after editing `.env` by hand outside Settings)
+- A ⚠️ badge appears automatically when the code or configuration changed since the watcher last started, with an option to restart straight away
 
-**Menu Rekam Manual (meeting di luar kalender, mis. panggilan dadakan/tidak terjadwal):**
-- **Start** — dialog isi nama meeting, langsung mulai rekam
-- **Stop** — hentikan rekaman manual, otomatis lanjut transkrip + generate MoM di background
+**Manual Recording menu (meetings outside the calendar, e.g. an impromptu or unscheduled call):**
+- **Start** — a dialog asks for the meeting name, then recording starts
+- **Stop** — stop the manual recording; transcript and MoM generation then continue in the background
 
-**Event List** — daftar meeting hari ini + status, klik yang sudah selesai untuk buka notulennya
+**Event List** — today's meetings with their status; click a finished one to open its minutes
 
-**Gagal Diproses (N)** — muncul otomatis kalau ada meeting (30 hari terakhir) yang error, atau macet di "processing" lebih dari 3 jam, dan **masih punya audio atau transkrip** di disk. Tiap meeting punya pilihan:
-- **Buat ulang notulen (pakai transkrip yang ada)** — tidak transkripsi ulang (hemat waktu & kuota), cocok kalau yang gagal cuma step notulen (mis. provider AI error/kuota habis)
-- **Transkrip ulang dari audio + notulen** — kalau transkripnya belum ada atau hasilnya jelek (butuh audio belum kena retensi 3 hari)
+**Gagal Diproses (N)** (*Failed to process*) — appears automatically when a meeting (last 30 days) failed, or is stuck in "processing" for more than 3 hours, **and still has audio or a transcript** on disk. For each meeting you can choose:
+- **Buat ulang notulen (pakai transkrip yang ada)** (*Rebuild minutes from the existing transcript*) — no re-transcription (saves time and quota); right when only the minutes step failed (for example an AI provider error or exhausted quota)
+- **Transkrip ulang dari audio + notulen** (*Re-transcribe from audio + minutes*) — when the transcript does not exist yet or came out poor (needs audio that has not been removed by the 3-day retention)
 
-Prosesnya jalan di background dan muncul notifikasi saat selesai/gagal. Dari terminal: `meetresult retry <meetingId>` (tambah `--transcribe` untuk paksa transkripsi ulang).
+It runs in the background and a notification appears when it finishes or fails. From a terminal: `meetresult retry <meetingId>` (add `--transcribe` to force re-transcription).
 
-**Pengaturan...** — jendela native (bukan edit `.env` manual), dengan menu navigasi di sisi kiri dan detail pengaturan di kanan (pola macOS System Settings). Ada 3 menu:
-- **Notulen** — Template MoM, Disusun oleh, Nama Organisasi (berlaku untuk semua skema template)
-- **Transkripsi** — dua grup terpisah dipisah garis: **Provider** dan **Fallback Provider**
-- **Notulen AI** — sama, dua grup terpisah: **Provider** dan **Fallback Provider**
+**Peringatan (N)** (*Warnings*) — appears when something went wrong: a provider failed (even if the fallback rescued the job), a recording could not be finalized, or processing failed. A macOS notification is shown once per warning with the actual error text, and the menu lists the latest ones (click one for the full message; **Tandai Semua Sudah Dibaca** marks them all read). ⚠️ means a problem that was handled; ⛔ means it failed and needs your action (for example a provider whose login expired — the warning includes the exact command to log in again).
 
-Di menu Transkripsi & Notulen AI, tiap grup berisi dropdown providernya sendiri **beserta seluruh setting milik provider itu** (Type / API Key / Model), sehingga tidak ada kebingungan API Key ini milik provider yang mana. Field yang muncul menyesuaikan provider yang dipilih di grup tersebut:
+**Pengaturan...** (*Settings*) — a native window (not hand-editing `.env`), with a navigation menu on the left and the settings detail on the right (the macOS System Settings pattern). It has 3 sections:
+- **Notulen** (*Minutes*) — MoM template, Prepared by, Organization name (applies to all template schemes)
+- **Transkripsi** (*Transcription*) — two separate groups divided by a line: **Provider** and **Fallback Provider**
+- **Notulen AI** (*Minutes AI*) — the same, two separate groups: **Provider** and **Fallback Provider**
 
-| Provider | Field yang muncul |
+In the Transcription and Minutes AI sections, each group holds its own provider dropdown **together with all the settings that belong to that provider** (Type / API Key / Model), so there is never any doubt which API Key belongs to which provider. The fields shown follow the provider chosen in that group:
+
+| Provider | Fields shown |
 |---|---|
-| Whisper (lokal) | Model (+ status/unduh model) — tanpa API Key karena jalan lokal |
-| Gemini | API Key, Model |
-| OpenAI (transkripsi) | API Key, Model |
-| Claude | Type (cli/api), Model — plus API Key kalau Type = `api` |
-| OpenAI (notulen) | Base URL, API Key, Model |
+| Whisper (local) | Model (+ model status/download) — no API Key because it runs locally |
+| Gemini | API Key, Model (↻ lists your key's models) |
+| OpenAI (transcription) | API Key, Model |
+| OpenAI-compatible (transcription) | Base URL, API Key, Model (↻ lists the endpoint's models) |
+| 9Router (transcription) | URL, API Key, Model (↻ lists the speech-to-text models) |
+| Claude | Type (cli/api), Model (↻ refreshes the model list) — plus API Key when Type = `api` |
+| OpenAI (minutes) | Base URL, API Key, Model |
+| 9Router (minutes) | URL, API Key, Model |
 | Antigravity / OpenCode | Model |
 
-Kombinasi bebas: provider cloud bisa jadi fallback dari lokal atau sebaliknya, dan setting masing-masing selalu tersedia di grupnya sendiri. Khusus Whisper, Model untuk peran utama dan fallback memang terpisah (`WHISPER_MODEL` vs `WHISPER_FALLBACK_MODEL`) supaya bisa pakai model berbeda di tiap peran.
+Combine freely: a cloud provider can be the fallback of a local one or the reverse, and each one's settings are always available in its own group. For Whisper specifically, the Model for the primary and fallback roles is separate (`WHISPER_MODEL` vs `WHISPER_FALLBACK_MODEL`) so you can use a different model in each role.
 
-Tombol **Test** untuk verifikasi provider/model notulen yang sedang diisi sebelum disimpan.
+The **Test** button verifies **every model you filled in** (see [Testing all models](#testing-all-models-and-provider-resilience)) before you save.
 
-**Lainnya:**
-- **Buka Notulen** — buka folder `data/summaries` di Finder
-- **Log Aktivitas** — buka `data/watcher.log`
-- **Cek Update...** — cek versi terbaru dari GitHub repo (lihat [Update Aplikasi](#10-update-aplikasi))
-- **Keluar** — tutup tray (watcher/rekaman yang sedang jalan tidak otomatis mati, stop dulu jika perlu)
+**Other items:**
+- **Buka Notulen** (*Open Minutes*) — opens the `data/summaries` folder in Finder
+- **Log Aktivitas** (*Activity Log*) — opens `data/watcher.log`
+- **Cek Update...** (*Check for Updates*) — checks the latest version on the GitHub repo (see [Updating the App](#10-updating-the-app))
+- **Buka saat Login** (*Open at Login*) — installed app only; starts MeetResult when you log in
+- **Keluar** (*Quit*) — closes the menu bar app (a running watcher/recording is not stopped automatically; stop it first if needed)
 
-Icon ini dibuat native pakai Swift/AppKit (`mac/MeetResultTray.swift`), tanpa dependency Electron yang berat. Jika source-nya diubah, compile ulang dengan:
+The icon is built natively with Swift/AppKit (`mac/MeetResultTray.swift`), with no heavy Electron dependency. If you change the source, recompile with:
 ```bash
 bash mac/build.sh
 ```
 
-> Agar tray otomatis jalan tiap Mac dinyalakan, tambahkan `meetresult tray` ke **System Settings → General → Login Items**.
+> From a source checkout, to have the menu bar app start every time the Mac boots, add `meetresult tray` to **System Settings → General → Login Items**. (The installed app has its own **Buka saat Login** menu item.)
 
-## 10. Update Aplikasi
+## 10. Updating the App
 
 Repo: **https://github.com/aansun/MeetResult**
 
+- **Installed app:** menu bar → **Cek Update...**. If a newer version exists, the app opens the download page; run the new `MeetResult-<version>.pkg`. Your data and settings (in `~/Library/Application Support/MeetResult`) are kept. Restart the watcher afterwards (the app offers to when it detects changed code).
+- **Source checkout:**
+
 ```bash
-meetresult update              # cek apakah ada versi baru
-meetresult update --apply      # cek + langsung terapkan (git pull && npm install)
+meetresult update              # check whether a newer version exists
+meetresult update --apply      # check + apply right away (git pull && npm install)
 ```
 
-Atau lewat menu bar: klik icon "MR" → **Cek Update...**
+How update detection works:
+- If the project is a `git clone`, MeetResult compares the local HEAD commit with `origin` (needs internet, no login).
+- If it is not a git clone (for example a manual download/extract, or the installed app), it falls back to reading the version from `package.json` on GitHub directly. The installed app cannot update itself in place, so it sends you to the new installer instead.
 
-Cara kerja deteksi update:
-- Kalau project ini hasil `git clone`, MeetResult bandingkan commit HEAD lokal vs `origin` (butuh koneksi internet, tidak perlu login apa pun).
-- Kalau bukan git clone (mis. hasil download/extract manual), fallback ke pengecekan versi lewat `package.json` di GitHub secara langsung.
-
-Update manual (kalau tidak pakai `--apply`):
+Manual update (if you do not use `--apply`):
 ```bash
 git pull
 npm install
 ```
 
-> Setelah update kode, restart watcher (menu tray akan otomatis menawarkan "Restart Watch" begitu mendeteksi kode berubah) supaya perbaikan/fitur terbaru aktif.
+> After a code update, restart the watcher (the menu bar app automatically offers "Restart Watch" once it detects the code changed) so the latest fixes and features take effect.
 
-## 11. Struktur Data
+## 11. Data Layout
 
 ```
-data/
-  recordings/    # file audio .wav hasil rekaman (otomatis dihapus setelah AUDIO_RETENTION_DAYS hari)
-  transcripts/
-    2026-08/     # hasil transkripsi (.txt), dikelompokkan otomatis per bulan
-  summaries/
-    2026-08/     # notulen rapat (.docx) + data mentah (.json), dikelompokkan otomatis per bulan
-  db.json        # metadata semua meeting
-
-Template/
-  MoM_*.pdf      # contoh template MoM perusahaan (referensi struktur dokumen)
+<home>/                  # source checkout: the project folder; installed app: ~/Library/Application Support/MeetResult
+  .env                   # your settings
+  data/
+    recordings/          # .wav audio from recordings (automatically deleted after AUDIO_RETENTION_DAYS days)
+    transcripts/
+      2026-08/           # transcription results (.txt), grouped automatically by month
+    summaries/
+      2026-08/           # meeting minutes (.docx), grouped automatically by month
+        json/            # the raw JSON data behind each document (used by `meetresult show`)
+    db.json              # metadata of every meeting
+    alerts.json          # warnings shown in the menu bar app
+    watcher.log          # activity log
+  Template/              # optional: your own MoM templates and logo (override the built-in ones)
 ```
 
-> Folder bulanan (`YYYY-MM`) di `transcripts/` dan `summaries/` dibuat otomatis mengikuti tanggal meeting - supaya tidak menumpuk jadi satu folder besar seiring waktu.
+> The monthly folders (`YYYY-MM`) in `transcripts/` and `summaries/` are created automatically from the meeting date — so they do not pile up into one big folder over time. The summaries folder contains only `.docx` files (the documents you share); the raw JSON lives in its `json/` subfolder.
 
-## 12. Template MoM
+## 12. MoM Templates
 
-Dokumen `.docx` yang dihasilkan memakai **template dinamis** (`Template/mom_template.docx`) berisi tag/placeholder, di-render otomatis pakai data hasil ringkasan AI. Strukturnya:
+The generated `.docx` uses a **dynamic template** (`Template/mom_template.docx`) containing tags/placeholders, rendered automatically with the data from the AI summary. Its structure:
 
-- **Header**: Subject, Hari/Tanggal, Media, Peserta, Disusun oleh
-- **A. Pembahasan dan Kesepakatan**: tabel No, Topik, Status/Pembahasan, Kesepakatan
-- **B. Action Items**: tabel No, Action Item, PIC, Target
-- Catatan kaki
+- **Header**: Subject, Day/Date, Media, Participants, Prepared by
+- **A. Pembahasan dan Kesepakatan** (*Discussion and Agreements*): table with No, Topic, Status/Discussion, Agreement
+- **B. Action Items**: table with No, Action Item, PIC, Target
+- Footer note
 
-Nama file otomatis: `{JudulMeeting}_{YYYYMMDD}.docx` (jika ada duplikat, otomatis diberi sufiks `(2)`, `(3)`, dst).
+The file name is automatic: `{MeetingTitle}_{YYYYMMDD}.docx` (a duplicate automatically gets a `(2)`, `(3)`, … suffix).
 
-### Dua skema MoM yang tersedia
+### The two available MoM schemes
 
-| `MOM_TEMPLATE_TYPE` | Cocok untuk | Struktur |
+| `MOM_TEMPLATE_TYPE` | Best for | Structure |
 |---|---|---|
-| `structured` (default) | Rapat progress/review project mingguan | Tabel Pembahasan & Kesepakatan + tabel Action Items |
-| `meeting_minutes` | Rapat formal/audit/review kebijakan | Resume naratif bernomor + tabel Attendances (Nama/Perusahaan/Jabatan) |
+| `structured` (default) | Weekly project progress/review meetings | Discussion & Agreement table + Action Items table |
+| `meeting_minutes` | Formal/audit/policy-review meetings | Numbered narrative Resume + Attendances table (Name/Company/Position) |
 
-Ganti di `.env`:
+Change it in `.env`:
 ```
 MOM_TEMPLATE_TYPE=meeting_minutes
 ```
-Template default masing-masing skema otomatis dipakai (`Template/mom_template.docx` atau `Template/mom_meeting_minutes_template.docx`) kecuali kamu override lewat `MOM_TEMPLATE_PATH`.
+Each scheme's default template is used automatically (`Template/mom_template.docx` or `Template/mom_meeting_minutes_template.docx`) unless you override it with `MOM_TEMPLATE_PATH`. A template with the same file name in `<home>/Template/` takes priority over the built-in one.
 
-### Cara pakai TEMPLATE BARU (tanpa ubah kode)
+In the `meeting_minutes` template, the Resume uses **real Word numbered lists**: main points are numbered 1., 2., 3. (bold) and their sub-points are lettered a., b., c., restarting under every main point, each sub-point being its own paragraph with a hanging indent so long lines wrap neatly. The template tags for this are `{#resume}` … `{point}` … `{#subpoints}` `{text}` `{/subpoints}` … `{/resume}`. Older/custom templates that still use `{no}. {point}` with `{subpointsText}` keep working.
 
-Kalau kamu punya desain MoM baru dengan struktur/field YANG SAMA seperti salah satu skema di atas (misal beda logo, warna, kop surat perusahaan, tapi field-nya sama), begini caranya:
+**Logo:** put `logo.jpeg`, `logo.jpg`, or `logo.png` in the `Template/` folder (or point `MOM_LOGO_PATH` at it) and add the text `{%logo}` where you want it in a template. The logo is read locally at generation time and is never committed to git; if the file is missing or unreadable, the document is still produced without it.
 
-**1. Siapkan file `.docx`** (bukan PDF) dengan tag berikut persis (huruf besar/kecil harus sama):
+### Using a NEW TEMPLATE (no code changes)
 
-| Tag | Diisi dengan |
+If you have a new MoM design with the SAME structure/fields as one of the schemes above (say a different logo, colours, or company letterhead but the same fields), here is how:
+
+**1. Prepare a `.docx` file** (not PDF) with these exact tags (upper/lower case must match):
+
+| Tag | Filled with |
 |---|---|
-| `{subject}` | Judul rapat |
-| `{dateLabel}` | Hari/Tanggal (format Indonesia, otomatis) |
-| `{media}` | Media rapat (mis. Online Meeting - Microsoft Teams) |
-| `{participants}` | Daftar peserta |
-| `{preparedBy}` | Nama penyusun (dari `MOM_PREPARED_BY`) |
-| `{notes}` | Catatan tambahan/footer |
+| `{subject}` | Meeting title |
+| `{dateLabel}` | Day/Date (Indonesian format, automatic) |
+| `{media}` | Meeting medium (for example Online Meeting - Microsoft Teams) |
+| `{participants}` | Participant list |
+| `{preparedBy}` | Author's name (from `MOM_PREPARED_BY`) |
+| `{notes}` | Extra notes/footer |
 
-**2. Untuk tabel yang berulang** (Pembahasan & Action Items), buat 1 baris tabel sebagai "cetakan" yang akan diulang otomatis untuk tiap item:
+**2. For repeating tables** (Discussion & Action Items), make one table row as a "mould" that is repeated automatically for every item:
 
-- Tabel Pembahasan: taruh `{#discussion}` di **sel pertama** baris data (digabung dengan `{no}`), lalu `{topic}`, `{status}`, dan `{/discussion}` di **sel terakhir** (digabung dengan `{agreement}`).
+- Discussion table: put `{#discussion}` in the **first cell** of the data row (combined with `{no}`), then `{topic}`, `{status}`, and `{/discussion}` in the **last cell** (combined with `{agreement}`).
   ```
-  Sel 1: {#discussion}{no}   Sel 2: {topic}   Sel 3: {status}   Sel 4: {agreement}{/discussion}
+  Cell 1: {#discussion}{no}   Cell 2: {topic}   Cell 3: {status}   Cell 4: {agreement}{/discussion}
   ```
-- Tabel Action Items: sama polanya dengan `{#actionItems}` ... `{/actionItems}`, field: `{no}`, `{item}`, `{pic}`, `{target}`.
+- Action Items table: the same pattern with `{#actionItems}` … `{/actionItems}`, fields: `{no}`, `{item}`, `{pic}`, `{target}`.
 
-  Lihat contoh nyata di `Template/mom_template.docx` (buka di Word untuk lihat persis penempatan tag-nya) atau `scripts/generate-default-template.js` untuk lihat source code-nya.
+  See a real example in `Template/mom_template.docx` (open it in Word to see exactly where the tags sit) or `scripts/generate-default-template.js` for the source.
 
-**3. Simpan file template baru** ke folder `Template/`, misalnya `Template/mom_template_baru.docx`.
+**3. Save the new template** into the `Template/` folder, for example `Template/mom_template_new.docx`.
 
-**4. Arahkan aplikasi ke template baru** — edit `.env`:
+**4. Point the app at the new template** — edit `.env`:
    ```
-   MOM_TEMPLATE_PATH=Template/mom_template_baru.docx
+   MOM_TEMPLATE_PATH=Template/mom_template_new.docx
    ```
 
-**5. Selesai!** Jalankan `meetresult process`/`watch` seperti biasa — otomatis pakai template barumu, TANPA restart kode atau ubah program.
+**5. Done!** Run `meetresult process`/`watch` as usual — it uses your new template automatically, WITHOUT restarting any code or changing the program.
 
-> ⚠️ **Penting untuk loop tabel/paragraf berulang (docxtemplater)**: tag pembuka `{#nama}` dan penutup `{/nama}` untuk PARAGRAF (seperti Resume) wajib ada di **paragraf terpisah/kosong** dari paragraf isi, kalau tidak item ke-2 dst akan menempel ke item sebelumnya. Untuk loop TABEL (baris), taruh tag pembuka di sel pertama & tag penutup di sel terakhir baris yang sama — ini sudah benar tanpa perlu paragraf terpisah. Lihat `scripts/generate-meeting-minutes-template.js` sebagai contoh referensi.
+> ⚠️ **Important for repeating table/paragraph loops (docxtemplater)**: for PARAGRAPH loops (such as the Resume), the opening tag `{#name}` and closing tag `{/name}` must each sit in a **separate/empty paragraph**, apart from the content paragraphs — otherwise the 2nd and later items stick to the previous item. For TABLE (row) loops, put the opening tag in the first cell and the closing tag in the last cell of the same row — that is already correct with no separate paragraph needed. See `scripts/generate-meeting-minutes-template.js` as the reference example.
 
-### Kalau field/kolom BENAR-BENAR baru (skema ke-3, dst)
+### When a field/column is truly NEW (a 3rd scheme, etc.)
 
-Jika template barumu butuh field yang belum ada di kedua skema (mis. "Nomor Dokumen", "Approval", dsb), kasih tahu desainnya (kirim contoh PDF/Word) supaya bisa dibuatkan:
-1. File `Template/mom_<nama>_template.docx` baru dengan tag sesuai
-2. Skema baru di `src/summarize/schemas/<nama>Schema.js` (system prompt AI + mapping data)
-3. Registrasi di `src/summarize/summarizer.js` supaya bisa dipilih lewat `MOM_TEMPLATE_TYPE=<nama>`
+If your new template needs a field that exists in neither scheme (for example "Document Number" or "Approval"), share the design (send a sample PDF/Word file) so it can be built:
+1. A new `Template/mom_<name>_template.docx` file with the matching tags
+2. A new scheme in `src/summarize/schemas/<name>Schema.js` (the AI system prompt + data mapping)
+3. Registration in `src/summarize/summarizer.js` so it can be selected with `MOM_TEMPLATE_TYPE=<name>`
 
-Proses ini hanya sekali per desain baru — setelah terdaftar, bisa dipakai berkali-kali cukup lewat `.env`.
+This is needed only once per new design — after it is registered it can be reused any number of times through `.env` alone.
 
-## 13. Performa untuk Meeting Panjang (2+ jam)
+## 13. Performance for Long Meetings (2+ hours)
 
-Audio **tidak dipecah manual** — Whisper secara arsitektur internal sudah memproses audio panjang dalam jendela ~30 detik berurutan, jadi 1 file audio utuh (berapa pun durasinya) dikirim langsung ke Whisper apa adanya. Untuk mempercepat & menghemat resource pada meeting panjang, 2 optimasi bawaan `whisper-ctranslate2` diaktifkan secara default:
+Audio is **not split manually** — Whisper's internal architecture already processes long audio in sequential ~30-second windows, so one whole audio file (of any duration) is sent to Whisper as is. To speed things up and save resources on long meetings, two built-in `whisper-ctranslate2` optimisations are enabled by default:
 
-- **`WHISPER_BATCHED=true`** — proses beberapa segmen audio secara paralel dalam satu model (percepat 2-4x)
-- **`WHISPER_VAD_FILTER=true`** — lewati bagian hening/silence (lebih cepat + mengurangi risiko halusinasi teks di bagian tanpa suara)
+- **`WHISPER_BATCHED=true`** — processes several audio segments in parallel within one model (2-4x faster)
+- **`WHISPER_VAD_FILTER=true`** — skips silent parts (faster, and lowers the risk of hallucinated text in silent sections)
 
-**Hasil benchmark nyata** (MacBook Apple M5, model `medium`, audio 14 menit 40 detik):
+**Real benchmark results** (MacBook Apple M5, `medium` model, 14 minutes 40 seconds of audio):
 
-| Metrik | Hasil |
+| Metric | Result |
 |---|---|
-| Waktu transkripsi | 1 menit 50 detik (**~8x lebih cepat dari real-time**) |
-| Estimasi meeting 2 jam | **~15 menit** |
-| Peak RAM | ~5.7 GB (dari 16GB, sekitar 35%, hanya sesaat) |
-| CPU | Multi-core (tidak membebani 1 core saja) |
+| Transcription time | 1 minute 50 seconds (**~8x faster than real time**) |
+| Estimate for a 2-hour meeting | **~15 minutes** |
+| Peak RAM | ~5.7 GB (of 16 GB, about 35%, only briefly) |
+| CPU | Multi-core (does not load a single core only) |
 
-**Perbandingan dengan `large-v3`** (model default saat ini, MacBook Apple M5, audio lain 12 menit 3 detik, setting `WHISPER_BATCHED`/`WHISPER_VAD_FILTER` sama):
+**Comparison with `large-v3`** (the current default model, MacBook Apple M5, different audio of 12 minutes 3 seconds, the same `WHISPER_BATCHED`/`WHISPER_VAD_FILTER` settings):
 
-| Metrik | `medium` | `large-v3` |
+| Metric | `medium` | `large-v3` |
 |---|---|---|
-| Waktu transkripsi | ~1x kecepatan proporsional | **~4.2x lebih lambat** dari `medium` |
-| Kecepatan vs real-time | ~6.6x lebih cepat | **~1.6x lebih cepat** (masih lebih cepat dari durasi audio, tapi jauh lebih tipis marginnya) |
-| Estimasi meeting 2 jam | ~18 menit | **~1 jam 17 menit** |
-| Ukuran model (unduhan pertama) | ~1.4 GB | **~2.9 GB** |
+| Transcription time | ~1x proportional speed | **~4.2x slower** than `medium` |
+| Speed vs real time | ~6.6x faster | **~1.6x faster** (still faster than the audio duration, but a much thinner margin) |
+| Estimate for a 2-hour meeting | ~18 minutes | **~1 hour 17 minutes** |
+| Model size (first download) | ~1.4 GB | **~2.9 GB** |
 
-`large-v3` diverifikasi memperbaiki kesalahan transkripsi istilah Islam/Arab tertentu dibanding `medium` (mis. "Al-Khaliq" tidak lagi terbaca "alkoholik"), tapi **tidak** menjamin semua nama/istilah asing terbaca benar — untuk konten padat istilah spesifik seperti itu, kombinasikan dengan `WHISPER_HOTWORDS`/`WHISPER_INITIAL_PROMPT` (lihat bagian 5), atau pertimbangkan `TRANSCRIBE_PROVIDER=gemini` yang terbukti jauh lebih akurat untuk kasus ini.
+`large-v3` was verified to fix certain Islamic/Arabic term mistakes compared with `medium` (for example "Al-Khaliq" is no longer heard as "alkoholik"), but it does **not** guarantee every foreign name/term is heard correctly — for content dense in specific terms like that, combine it with `WHISPER_HOTWORDS`/`WHISPER_INITIAL_PROMPT` (see section 5), or consider `TRANSCRIBE_PROVIDER=gemini`, which proved far more accurate for this case.
 
-Kalau meeting kamu sangat panjang/rutin dan waktu proses lebih penting daripada akurasi maksimal, turunkan `WHISPER_MODEL` ke `medium` (lebih cepat, akurasi tetap baik untuk percakapan umum) atau `small` (paling cepat). Kalau RAM terbatas (≤8GB), kecilkan `WHISPER_BATCH_SIZE` ke `4`.
+If your meetings are very long or routine and processing time matters more than maximum accuracy, lower `WHISPER_MODEL` to `medium` (faster, still good accuracy for general conversation) or `small` (fastest). If RAM is limited (≤8 GB), lower `WHISPER_BATCH_SIZE` to `4`.
 
-## 14. Catatan Penting
+## 14. Important Notes
 
-- Perekaman **audio sistem** (suara peserta lain di Teams) memerlukan virtual audio device (BlackHole di macOS, Stereo Mix/VB-Cable di Windows, PulseAudio monitor di Linux) — ini batasan platform, bukan batasan aplikasi.
-- Pastikan mematuhi kebijakan perusahaan & hukum setempat terkait **persetujuan perekaman rapat** (consent).
-- Model Whisper `medium`/`large` lebih akurat untuk Bahasa Indonesia tapi butuh resource lebih besar.
-- **Claude tidak bisa dipakai untuk transkripsi audio** (model Anthropic saat ini hanya menerima teks & gambar, bukan audio) — kalau `SUMMARY_PROVIDER=claude`, transkripsi tetap pakai Whisper/Gemini, baru hasil teksnya dikirim ke Claude untuk dibuat notulen.
-- **Self-healing symlink Claude CLI (macOS)**: Claude Desktop auto-update ke versi baru kadang membuat symlink `claude` di PATH (mis. `/opt/homebrew/bin/claude`) jadi rusak (menunjuk ke folder versi lama yang sudah dihapus). Kalau Claude CLI dipakai (mode `cli`, sebagai provider utama ATAU fallback notulen), watcher otomatis cek & perbaiki symlink ini di setiap siklus polling — **tidak perlu restart apapun**, perbaikan langsung aktif untuk pemanggilan `claude` berikutnya.
+- Recording **system audio** (the other participants' voices in Teams) requires a virtual audio device (BlackHole on macOS, Stereo Mix/VB-Cable on Windows, a PulseAudio monitor on Linux) — this is a platform limitation, not an app limitation.
+- Make sure you comply with company policy and local law regarding **recording consent** for meetings.
+- The Whisper `medium`/`large` models are more accurate for Bahasa Indonesia but need more resources.
+- **Claude cannot be used for audio transcription** (Anthropic models currently accept only text and images, not audio) — with `SUMMARY_PROVIDER=claude`, transcription still uses Whisper/Gemini, and only the resulting text is sent to Claude to write the minutes.
+- **Self-healing Claude CLI symlink (macOS)**: when Claude Desktop auto-updates to a new version, the `claude` symlink on your PATH (for example `/opt/homebrew/bin/claude`) sometimes breaks or disappears (it points at an old version folder that was removed, and Claude Desktop's folder layout also changed over time). When the Claude CLI is in use (`cli` mode, as the primary OR the fallback minutes provider), the watcher automatically checks and repairs this symlink on every polling cycle — **no restart is needed**, and the fix applies to the very next `claude` call. It only touches symlinks that point into Claude Desktop's folder and never overwrites another installation.
+- **File-permission errors (`EPERM`) in iCloud-synced folders**: if your project or data folder lives under `~/Documents` or `~/Desktop` with iCloud "Desktop & Documents" sync enabled, macOS can briefly refuse access to files or create "conflict copy" files such as `watcher 2.pid`. MeetResult retries such errors, but the robust fix is to keep the data outside iCloud — which is exactly where the installed app keeps it (`~/Library/Application Support/MeetResult`). From a source checkout, move the project folder out of `~/Documents` or set `MEETRESULT_HOME` to a folder outside iCloud.
+- **Data folder override**: the installed app's data folder can be redirected with the `MEETRESULT_HOME` environment variable (used by the app to separate its read-only code from your data).

@@ -176,4 +176,22 @@ async function transcribeAudio(audioFilePath) {
   }
 }
 
-module.exports = { transcribeAudio };
+/**
+ * Tes SATU provider transkripsi saja (tanpa fallback, tanpa menulis ke data/transcripts) -
+ * dipakai tes Pengaturan supaya tiap provider (utama & fallback) diuji sendiri-sendiri.
+ * `role`: "primary" | "fallback" (Whisper pakai model fallback khusus di peran fallback).
+ * Return teks hasil transkripsi.
+ */
+async function testTranscribeProvider(providerName, audioFilePath, role = "primary") {
+  const os = require("os");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meetresult-test-"));
+  try {
+    const whisperModel = role === "fallback" && providerName === "whisper" ? config.whisper.fallbackModel : undefined;
+    const file = await transcribeWithProvider(providerName, audioFilePath, tmpDir, whisperModel);
+    return fs.readFileSync(file, "utf-8");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+module.exports = { transcribeAudio, testTranscribeProvider };

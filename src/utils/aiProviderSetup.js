@@ -3,7 +3,8 @@ const path = require("path");
 const { detectLocalAiServer } = require("./localAiDetect");
 
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
-const ENV_PATH = path.join(ROOT_DIR, ".env");
+const HOME_DIR = process.env.MEETRESULT_HOME ? path.resolve(process.env.MEETRESULT_HOME) : ROOT_DIR;
+const ENV_PATH = path.join(HOME_DIR, ".env");
 const ENV_EXAMPLE_PATH = path.join(ROOT_DIR, ".env.example");
 
 function readEnvValue(content, key) {

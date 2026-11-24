@@ -2,10 +2,28 @@ const path = require("path");
 const fs = require("fs");
 const dotenv = require("dotenv");
 
+// ROOT_DIR = folder KODE aplikasi (src/, Template/ bawaan, .env.example). HOME_DIR = folder
+// DATA & KONFIGURASI user (.env, data/, Template/ kustom). Di mode pengembangan keduanya sama
+// (folder project). Di aplikasi terpasang (MeetResult.app) kode ada di dalam bundle yang
+// tidak boleh diubah, jadi tray menyetel MEETRESULT_HOME ke
+// ~/Library/Application Support/MeetResult - folder yang juga di luar iCloud ~/Documents.
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
-dotenv.config({ path: path.join(ROOT_DIR, ".env") });
+const HOME_DIR = process.env.MEETRESULT_HOME ? path.resolve(process.env.MEETRESULT_HOME) : ROOT_DIR;
+if (HOME_DIR !== ROOT_DIR) {
+  fs.mkdirSync(HOME_DIR, { recursive: true });
+  const envFile = path.join(HOME_DIR, ".env");
+  const example = path.join(ROOT_DIR, ".env.example");
+  if (!fs.existsSync(envFile) && fs.existsSync(example)) fs.copyFileSync(example, envFile);
+}
+dotenv.config({ path: path.join(HOME_DIR, ".env") });
 
-const DATA_DIR = path.join(ROOT_DIR, "data");
+/** Cari file Template: versi kustom user di HOME_DIR/Template dulu, baru bawaan di ROOT_DIR/Template. */
+function resolveTemplateFile(name) {
+  const custom = path.join(HOME_DIR, "Template", name);
+  return fs.existsSync(custom) ? custom : path.join(ROOT_DIR, "Template", name);
+}
+
+const DATA_DIR = path.join(HOME_DIR, "data");
 const RECORDINGS_DIR = path.join(DATA_DIR, "recordings");
 const TRANSCRIPTS_DIR = path.join(DATA_DIR, "transcripts");
 const SUMMARIES_DIR = path.join(DATA_DIR, "summaries");
@@ -18,6 +36,8 @@ const TOKEN_CACHE_FILE = path.join(DATA_DIR, "token-cache.json");
 
 module.exports = {
   ROOT_DIR,
+  HOME_DIR,
+  resolveTemplateFile,
   DATA_DIR,
   RECORDINGS_DIR,
   TRANSCRIPTS_DIR,
@@ -56,6 +76,11 @@ module.exports = {
     // untuk nonaktifkan fallback. Kalau diisi (mis. "claude") dan berbeda dari provider utama,
     // notulen otomatis dicoba ulang lewat provider ini sebelum benar-benar gagal.
     fallbackProvider: (process.env.SUMMARY_FALLBACK_PROVIDER || "").toLowerCase(),
+    // Gangguan SEMENTARA (jaringan putus, server sibuk/503, respons kosong) diulang dulu sekian
+    // kali di provider yang sama setelah jeda ini, baru pindah ke fallback. Login habis/kuota
+    // habis TIDAK diulang (percuma). Set AI_TRANSIENT_RETRIES=0 untuk mematikan.
+    transientRetries: Number(process.env.AI_TRANSIENT_RETRIES ?? 1),
+    transientRetryDelayMs: Number(process.env.AI_TRANSIENT_RETRY_DELAY_MS || 30000),
   },
 
   claude: {
@@ -264,10 +289,8 @@ module.exports = {
     // Path file template .docx (berisi tag). Ganti/tunjuk ke file lain di folder Template/
     // untuk pakai template baru TANPA ubah kode. Jika kosong, default mengikuti templateType.
     templatePath: process.env.MOM_TEMPLATE_PATH
-      ? path.resolve(ROOT_DIR, process.env.MOM_TEMPLATE_PATH)
-      : path.join(
-          ROOT_DIR,
-          "Template",
+      ? path.resolve(HOME_DIR, process.env.MOM_TEMPLATE_PATH)
+      : resolveTemplateFile(
           process.env.MOM_TEMPLATE_TYPE === "meeting_minutes"
             ? "mom_meeting_minutes_template.docx"
             : "mom_template.docx"

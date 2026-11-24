@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 
 // MeetResultTray — Menu bar indicator untuk aplikasi MeetResult
 // Icon: "MR" dengan titik status (hijau = ada aktivitas berjalan, abu-abu = semua berhenti)
@@ -11,14 +12,34 @@ import Cocoa
 let fm = FileManager.default
 
 // Argumen pertama = path root project MeetResult (default: cwd saat dijalankan)
+// Mode terpasang (MeetResult.app dari installer .pkg): kode ada di dalam bundle
+// (Contents/Resources/app + Node bawaan di Contents/Resources/node), sedangkan .env & data user
+// disimpan di ~/Library/Application Support/MeetResult (bukan di dalam bundle, bukan di iCloud
+// ~/Documents). Mode pengembangan (binary dijalankan langsung dari folder project): perilaku lama.
+let bundledAppDir: String? = {
+    guard Bundle.main.bundlePath.hasSuffix(".app"), let res = Bundle.main.resourcePath else { return nil }
+    let dir = res + "/app"
+    return fm.fileExists(atPath: dir + "/package.json") ? dir : nil
+}()
+let isBundled = bundledAppDir != nil
+
+/// Folder KODE (src/, bin/, package.json).
 let projectDir: String = {
+    if let dir = bundledAppDir { return dir }
     if CommandLine.arguments.count > 1 {
         return CommandLine.arguments[1]
     }
     return fm.currentDirectoryPath
 }()
 
-let dataDir = projectDir + "/data"
+/// Folder DATA & KONFIGURASI user (.env, data/) - diteruskan ke Node lewat MEETRESULT_HOME.
+let homeDir: String = {
+    if let custom = ProcessInfo.processInfo.environment["MEETRESULT_HOME"], !custom.isEmpty { return custom }
+    if isBundled { return NSHomeDirectory() + "/Library/Application Support/MeetResult" }
+    return projectDir
+}()
+
+let dataDir = homeDir + "/data"
 let pidFile = dataDir + "/watcher.pid"
 let watcherMetaFile = dataDir + "/watcher-meta.json"
 let logFile = dataDir + "/watcher.log"
@@ -27,8 +48,8 @@ let alertsFile = dataDir + "/alerts.json"
 let recordingStateFile = dataDir + "/recording-state.json"
 let dbFile = dataDir + "/db.json"
 let manualLogFile = dataDir + "/manual-record.log"
-let nodeBin = "node"
-let cliScript = "bin/meetresult.js"
+let nodeBin: String = isBundled ? (Bundle.main.resourcePath! + "/node/bin/node") : "node"
+let cliScript: String = isBundled ? (projectDir + "/bin/meetresult.js") : "bin/meetresult.js"
 
 /// Environment dictionary standar dipakai semua subprocess yang di-spawn tray (node/agy CLI) -
 /// PATH diperluas ke lokasi umum tool CLI (Homebrew, pip user-install, dsb), dan NODE_OPTIONS
@@ -41,6 +62,7 @@ func subprocessEnvironment(
     var env = ProcessInfo.processInfo.environment
     env["PATH"] = extraPaths + ":" + (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
     env["NODE_OPTIONS"] = "--disable-warning=ExperimentalWarning"
+    env["MEETRESULT_HOME"] = homeDir
     return env
 }
 
@@ -74,7 +96,7 @@ func formatShortDate(_ iso: String) -> String {
 
 // MARK: - .env: baca/tulis minimalis (baris "KEY=value")
 
-let envFilePath = projectDir + "/.env"
+let envFilePath = homeDir + "/.env"
 
 // ID model Claude yang diketahui - dipakai untuk isi awal dropdown di window Pengaturan.
 // Combo box tetap bisa diketik manual kalau ada ID lain yang belum masuk daftar ini.
@@ -175,6 +197,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // tidak muncul di Dock, hanya menu bar
 
+        let firstRun = isBundled && !fm.fileExists(atPath: envFilePath)
+        if isBundled { bootstrapHome() }
+
         if !fm.fileExists(atPath: dataDir) {
             try? fm.createDirectory(atPath: dataDir, withIntermediateDirectories: true)
         }
@@ -189,6 +214,94 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.updateStatus()
         }
+
+        if isBundled {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self = self else { return }
+                // Pengguna baru: langsung buka Pengaturan untuk mengisi kalender & provider AI.
+                if firstRun { self.openSettings() }
+                self.offerInstallMissingDependencies()
+                // Aplikasi terpasang harus "langsung jalan": kalau kalender sudah dikonfigurasi,
+                // nyalakan watcher otomatis (tanpa perlu klik Start tiap kali app dibuka).
+                if !self.isRunning() && self.isCalendarConfigured() { self.startWatcher() }
+            }
+        }
+    }
+
+    // MARK: - Aplikasi terpasang (installer .pkg)
+
+    /// Siapkan folder data user + salin .env.example jadi .env pada peluncuran pertama.
+    func bootstrapHome() {
+        try? fm.createDirectory(atPath: homeDir, withIntermediateDirectories: true)
+        let example = projectDir + "/.env.example"
+        if !fm.fileExists(atPath: envFilePath), fm.fileExists(atPath: example) {
+            try? fm.copyItem(atPath: example, toPath: envFilePath)
+        }
+    }
+
+    func isCalendarConfigured() -> Bool {
+        let env = readEnvFile()
+        let mode = readEnvValue(env, "CALENDAR_MODE")
+        if mode == "graph" { return !readEnvValue(env, "AZURE_CLIENT_ID").isEmpty }
+        return !readEnvValue(env, "CALENDAR_ICS_URL").isEmpty
+    }
+
+    /// Komponen sistem yang tidak bisa dibundel: ffmpeg (perekaman) dan driver BlackHole (suara
+    /// lawan bicara). Whisper lokal opsional - provider cloud tidak membutuhkannya.
+    func missingDependencies() -> [String] {
+        var missing: [String] = []
+        if !["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].contains(where: { fm.isExecutableFile(atPath: $0) }) {
+            missing.append("ffmpeg")
+        }
+        let halDir = "/Library/Audio/Plug-Ins/HAL"
+        let drivers = (try? fm.contentsOfDirectory(atPath: halDir)) ?? []
+        if !drivers.contains(where: { $0.hasPrefix("BlackHole") }) {
+            missing.append("blackhole-2ch")
+        }
+        return missing
+    }
+
+    func offerInstallMissingDependencies() {
+        let missing = missingDependencies()
+        guard !missing.isEmpty else { return }
+        // Jangan menagih tiap peluncuran: maksimal sekali per 24 jam.
+        let key = "mr.depsPromptedAt"
+        let last = UserDefaults.standard.double(forKey: key)
+        if last > 0, Date().timeIntervalSince1970 - last < 24 * 3600 { return }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: key)
+
+        let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].first { fm.isExecutableFile(atPath: $0) }
+        let alert = NSAlert()
+        alert.messageText = "Komponen yang dibutuhkan belum terpasang"
+        alert.informativeText = "MeetResult butuh: \(missing.joined(separator: ", ")) untuk merekam rapat."
+            + (brew == nil
+                ? "\n\nHomebrew belum terpasang. Pasang Homebrew dulu (brew.sh), lalu buka MeetResult lagi."
+                : "\n\nKlik \"Pasang\" - Terminal akan terbuka dan memasangnya lewat Homebrew (cukup ikuti prosesnya).")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: brew == nil ? "Buka brew.sh" : "Pasang")
+        alert.addButton(withTitle: "Nanti")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        if let brew = brew {
+            let cmd = "\(brew) install \(missing.joined(separator: " "))"
+            let script = "tell application \"Terminal\"\nactivate\ndo script \"\(cmd)\"\nend tell"
+            var err: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&err)
+            if err != nil { showAlert(title: "Tidak bisa membuka Terminal", message: "Jalankan manual di Terminal:\n\(cmd)") }
+        } else if let url = URL(string: "https://brew.sh") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled { try service.unregister() } else { try service.register() }
+        } catch {
+            showAlert(title: "Gagal mengatur 'Buka saat login'", message: error.localizedDescription)
+        }
+        sender.state = service.status == .enabled ? .on : .off
     }
 
     func buildMenu() {
@@ -298,6 +411,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let checkUpdate = NSMenuItem(title: "Cek Update...", action: #selector(checkForUpdate), keyEquivalent: "u")
         checkUpdate.target = self
         menu.addItem(checkUpdate)
+
+        if isBundled {
+            let loginItem = NSMenuItem(title: "Buka saat Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
+            loginItem.target = self
+            loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            menu.addItem(loginItem)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -1030,7 +1150,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let resultMessage: String
         if output.contains("Sudah versi terbaru") {
             resultMessage = "Sudah pakai versi terbaru \u{2705}"
-        } else if output.contains("Update tersedia") {
+        } else if output.contains("Update tersedia") || output.contains("Versi baru tersedia") {
+            if isBundled {
+                // Aplikasi terpasang tidak bisa self-update (bukan git clone) - arahkan ke installer baru.
+                let alert = NSAlert()
+                alert.messageText = "Versi baru tersedia"
+                alert.informativeText = "Unduh installer terbaru (MeetResult-*.pkg) dari halaman rilis, lalu jalankan - data & pengaturan Anda tetap aman."
+                alert.addButton(withTitle: "Buka Halaman Unduhan")
+                alert.addButton(withTitle: "Nanti")
+                NSApp.activate(ignoringOtherApps: true)
+                if alert.runModal() == .alertFirstButtonReturn,
+                   let url = URL(string: "https://github.com/aansun/MeetResult/releases/latest") {
+                    NSWorkspace.shared.open(url)
+                }
+                return
+            }
             resultMessage = "Ada update baru tersedia! Jalankan 'meetresult update --apply' di terminal untuk memperbarui."
         } else if output.contains("Gagal") || output.contains("Error") {
             resultMessage = "Gagal cek update. Pastikan koneksi internet aktif."
@@ -1424,7 +1558,7 @@ class SettingsWindowController: NSWindowController {
 
         testButton.target = self
         testButton.action = #selector(testCurrentModel)
-        testButton.toolTip = "Kirim transkrip kecil ke provider/model yang sedang diisi, tanpa buat file/rekaman"
+        testButton.toolTip = "Tes SEMUA model yang diisi (notulen & transkripsi, utama & fallback) satu per satu dengan data uji kecil - bisa makan beberapa menit, tidak membuat file/rekaman"
 
         let saveButton = NSButton(title: "Simpan", target: self, action: #selector(saveSettings))
         saveButton.keyEquivalent = "\r"
@@ -2430,7 +2564,7 @@ class SettingsWindowController: NSWindowController {
         }
 
         testButton.isEnabled = false
-        testButton.title = "Menguji..."
+        testButton.title = "Menguji semua model..."
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -2481,7 +2615,8 @@ class SettingsWindowController: NSWindowController {
     private func handleTestResult(_ output: String) {
         let lastLine = output.split(separator: "\n").last.map(String.init) ?? ""
         guard let data = lastLine.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [[String: Any]] else {
             appDelegate?.showAlert(
                 title: "Tes Gagal",
                 message: "Tidak bisa membaca hasil tes.\n\n\(output.isEmpty ? "(tidak ada output)" : String(output.prefix(500)))"
@@ -2489,27 +2624,33 @@ class SettingsWindowController: NSWindowController {
             return
         }
 
-        let providerLabel = json["providerLabel"] as? String ?? ""
-        let ok = json["ok"] as? Bool ?? false
-
-        if ok {
-            let elapsed = json["elapsedSeconds"] as? Double ?? 0
-            let markers = (json["markersFound"] as? [String]) ?? []
-            let note = markers.isEmpty
-                ? "\n\n\u{26A0}\u{FE0F} Respons valid tapi tidak menyebut satupun detail dari transkrip tes - model mungkin mengarang konten, bukan benar-benar membaca transkrip. Waspada untuk meeting asli."
-                : "\n\nKonten terverifikasi mengikuti isi transkrip tes."
-            appDelegate?.showAlert(
-                title: "\u{2705} Provider/Model Siap Dipakai",
-                message: "\(providerLabel)\nWaktu respons: \(elapsed) detik.\(note)"
-            )
-        } else {
-            let stage = json["stage"] as? String ?? ""
-            let errorMsg = json["error"] as? String ?? ""
-            let detail = stage == "placeholder"
-                ? "Model mengembalikan teks placeholder mentah dari instruksi, bukan hasil ekstraksi transkrip asli - model ini kemungkinan tidak cukup mampu mengikuti instruksi JSON terstruktur. Coba model lain."
-                : (errorMsg.isEmpty ? "Gagal menghubungi provider." : errorMsg)
-            appDelegate?.showAlert(title: "\u{274C} Tes Gagal", message: "\(providerLabel)\n\n\(detail)")
+        let allOk = json["ok"] as? Bool ?? false
+        let anyWarn = json["warn"] as? Bool ?? false
+        var lines: [String] = []
+        for r in results {
+            let ok = r["ok"] as? Bool ?? false
+            let warn = r["warn"] as? Bool ?? false
+            let role = r["role"] as? String ?? ""
+            let label = r["label"] as? String ?? ""
+            let secs = (r["elapsedSeconds"] as? Double).map { String(format: " (%.1f dtk)", $0) } ?? ""
+            let icon = !ok ? "\u{274C}" : (warn ? "\u{26A0}\u{FE0F}" : "\u{2705}")
+            var block = "\(icon) \(role)\n    \(label)\(secs)"
+            if ok, let note = r["note"] as? String, !note.isEmpty { block += "\n    \(note)" }
+            if !ok {
+                block += "\n    \(r["error"] as? String ?? "Gagal menghubungi provider.")"
+                if let hint = r["hint"] as? String, !hint.isEmpty { block += "\n    \u{27A1}\u{FE0F} \(hint)" }
+            }
+            lines.append(block)
         }
+        if let w = json["claudeWarning"] as? String, !w.isEmpty {
+            lines.append("\u{26A0}\u{FE0F} \(w)")
+        }
+
+        let failed = results.filter { !($0["ok"] as? Bool ?? false) }.count
+        let title = allOk
+            ? (anyWarn ? "\u{26A0}\u{FE0F} Semua Model Merespons (ada peringatan)" : "\u{2705} Semua Model Berjalan Normal")
+            : "\u{274C} \(failed) dari \(results.count) Tes Gagal"
+        appDelegate?.showAlert(title: title, message: lines.joined(separator: "\n\n"))
     }
 
     @objc func closeWindow() {

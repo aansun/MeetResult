@@ -24,3 +24,6 @@ data/summaries/*
 Template/*
 !Template/*_template.docx
 !Template/.gitkeep
+
+# Installer build output
+dist/

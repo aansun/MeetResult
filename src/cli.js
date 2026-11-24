@@ -91,7 +91,7 @@ program
   .description(
     "MeetResult - Rekam, transkrip, dan buat notulen rapat Teams secara otomatis, Bahasa Indonesia."
   )
-  .version("1.10.8");
+  .version("1.10.9");
 
 program
   .command("login")
@@ -434,103 +434,208 @@ program
 program
   .command("test-ai")
   .description(
-    "Tes cepat provider/model AI notulen yang aktif - kirim transkrip kecil, cek responsnya valid & benar-benar mengikuti isi transkrip (tanpa bikin file/rekaman)"
+    "Tes semua provider/model yang dikonfigurasi: notulen (utama & fallback) dan transkripsi (utama & fallback) - tiap provider diuji SENDIRI-SENDIRI (tanpa diselamatkan fallback), tanpa bikin file/rekaman"
   )
   .option("--json", "Output hasil sebagai JSON satu baris (dipakai tray Pengaturan), tanpa log berwarna")
   .action(async (opts) => {
+    const os = require("os");
+    const { spawnSync } = require("child_process");
     const { requestMomFromAI } = require("./summarize/summarizer");
+    const { testTranscribeProvider } = require("./transcribe/transcriber");
+    const { inspectClaudeInstallations } = require("./utils/claudeBin");
+    const { isAuthProviderError, authHint } = require("./utils/providerErrors");
     const jsonMode = !!opts.json;
 
-    const providerLabel =
-      config.ai.provider === "openai"
-        ? `openai (${config.openai.baseURL || "https://api.openai.com/v1"}, model: ${
-            config.openai.model || "-"
-          })`
-        : config.ai.provider === "agy"
+    // Tes harus jujur: tanpa retry bertele-tele (kalau gagal, langsung kelihatan gagalnya).
+    config.ai.transientRetries = 0;
+    config.gemini.maxRetries = 1;
+
+    // Timer WAJIB dibatalkan begitu selesai - kalau tidak, timer 90-240 detik yang menggantung
+    // menahan proses Node tetap hidup lama setelah semua hasil tercetak (tombol Test di tray
+    // menunggu proses ini keluar).
+    const withTimeout = (promise, ms, label) => {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timeout setelah ${Math.round(ms / 1000)} detik - ${label} terlalu lambat merespons`)),
+          ms
+        );
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    };
+
+    const summaryLabel = (name) =>
+      name === "openai"
+        ? `openai (${config.openai.baseURL || "https://api.openai.com/v1"}, model: ${config.openai.model || "-"})`
+        : name === "agy"
         ? `agy (model: ${config.agy.model || "default"})`
-        : config.ai.provider === "opencode"
+        : name === "opencode"
         ? `opencode (model: ${config.opencode.model || "default"})`
+        : name === "ninerouter"
+        ? `ninerouter (model: ${config.ninerouter.model || "-"})`
         : `claude/${config.claude.mode} (model: ${
             config.claude.mode === "api" ? config.claude.model : config.claude.cliModel || "default"
           })`;
 
-    if (!jsonMode) {
-      logger.title("TES PROVIDER/MODEL AI");
-      logger.info(`Provider aktif: ${providerLabel}`);
-    }
+    const transcribeLabel = (name, role) =>
+      name === "gemini"
+        ? `gemini (model: ${config.gemini.model || "-"})`
+        : name === "openai"
+        ? `openai (model: ${config.openai.transcribeModel})`
+        : name === "openai-compatible"
+        ? `openai-compatible (${config.openaiCompatibleTranscribe.baseURL || "-"}, model: ${config.openaiCompatibleTranscribe.model || "-"})`
+        : name === "ninerouter"
+        ? `ninerouter (model: ${config.ninerouterTranscribe.model || "-"})`
+        : `whisper (model: ${role === "fallback" ? config.whisper.fallbackModel || config.whisper.model : config.whisper.model})`;
 
-    // Transkrip kecil dengan detail unik (nama & hari) yang HARUS muncul di hasil kalau
-    // model benar-benar membaca & mengekstrak isi transkrip, bukan mengarang/echo placeholder.
+    const say = (fn) => {
+      if (!jsonMode) fn();
+    };
+    say(() => logger.title("TES SEMUA PROVIDER/MODEL"));
+
+    const results = [];
+    const record = (r) => {
+      results.push(r);
+      say(() => {
+        const head = `[${r.role}] ${r.label}`;
+        if (r.ok) logger.success(`${head} - OK (${r.elapsedSeconds} dtk)${r.note ? " - " + r.note : ""}`);
+        else logger.error(`${head} - GAGAL: ${r.error}${r.hint ? "\n    -> " + r.hint : ""}`);
+      });
+    };
+
+    // ---------- Notulen ----------
     const testTranscript =
       "Rapat verifikasi sistem MeetResult. Dian menyampaikan bahwa proses pengujian koneksi AI " +
       "berjalan lancar. Disepakati bahwa Fajar akan mengecek ulang hasil notulen paling lambat " +
       "hari Jumat. Tidak ada kendala lain yang dilaporkan.";
     const markers = ["dian", "fajar", "jumat"];
-    const timeoutMs = 60000;
 
-    if (!jsonMode) {
-      logger.info(`Mengirim transkrip tes (timeout ${timeoutMs / 1000} detik)...`);
+    const summaryRoles = [{ role: "Notulen - utama", name: config.ai.provider }];
+    if (config.ai.fallbackProvider && config.ai.fallbackProvider !== config.ai.provider) {
+      summaryRoles.push({ role: "Notulen - fallback", name: config.ai.fallbackProvider });
     }
 
-    const start = Date.now();
-    let result;
+    for (const { role, name } of summaryRoles) {
+      const label = summaryLabel(name);
+      const start = Date.now();
+      try {
+        const result = await withTimeout(
+          requestMomFromAI(testTranscript, { subject: "Tes Koneksi AI" }, { providerOnly: name }),
+          90000,
+          "provider notulen"
+        );
+        const elapsedSeconds = Math.round(((Date.now() - start) / 1000) * 10) / 10;
+        const raw = JSON.stringify(result).toLowerCase();
+        if (raw.includes("judul singkat rapat") || raw.includes("nama peserta")) {
+          record({
+            role, label, ok: false, elapsedSeconds,
+            error: "Model mengembalikan teks placeholder mentah dari instruksi, bukan hasil ekstraksi transkrip - model kurang mampu mengikuti instruksi JSON terstruktur.",
+          });
+          continue;
+        }
+        const found = markers.filter((m) => raw.includes(m));
+        record({
+          role, label, ok: true, elapsedSeconds,
+          note: found.length === 0
+            ? "PERINGATAN: respons valid tapi tidak menyebut detail transkrip tes (model mungkin mengarang)"
+            : `konten terverifikasi (${found.join(", ")})`,
+          warn: found.length === 0,
+        });
+      } catch (err) {
+        record({
+          role, label, ok: false,
+          elapsedSeconds: Math.round(((Date.now() - start) / 1000) * 10) / 10,
+          error: err.message.replace(/\s+/g, " ").slice(0, 400),
+          // Petunjuk login sudah ditempel ke pesan error oleh callProviderChecked() - cukup
+          // tambahkan di sini kalau belum ada, supaya tidak tampil dobel.
+          hint:
+            isAuthProviderError(err.message) && !err.message.includes(" -> ")
+              ? authHint(name, name === "claude" ? require("./utils/claudeBin").resolveClaudeBinary() : null)
+              : undefined,
+        });
+      }
+    }
+
+    // Peringatan instalasi claude ganda (relevan kalau claude CLI dipakai di peran manapun)
+    let claudeWarning = null;
+    if (config.claude.mode === "cli" && summaryRoles.some((r) => r.name === "claude")) {
+      const info = inspectClaudeInstallations();
+      if (info.duplicate) claudeWarning = info.warning;
+    }
+
+    // ---------- Transkripsi ----------
+    const transcribeRoles = [{ role: "Transkripsi - utama", name: config.transcribe.provider, kind: "primary" }];
+    if (config.transcribe.fallbackProvider && config.transcribe.fallbackProvider !== config.transcribe.provider) {
+      transcribeRoles.push({ role: "Transkripsi - fallback", name: config.transcribe.fallbackProvider, kind: "fallback" });
+    }
+
+    // Audio uji = ucapan sungguhan (macOS `say`, suara Indonesia) berisi nama-nama penanda,
+    // supaya yang diuji benar-benar kemampuan mengenali suara, bukan sekadar koneksi.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "meetresult-testaudio-"));
+    const wav = path.join(tmpDir, "tes.wav");
+    let audioReady = false;
+    let audioError = "";
     try {
-      result = await Promise.race([
-        requestMomFromAI(testTranscript, { subject: "Tes Koneksi AI" }),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`Timeout setelah ${timeoutMs / 1000} detik - provider terlalu lambat merespons`)),
-            timeoutMs
-          )
-        ),
-      ]);
-    } catch (err) {
-      if (jsonMode) {
-        console.log(JSON.stringify({ ok: false, stage: "request", error: err.message, providerLabel }));
-      } else {
-        logger.error(`GAGAL: ${err.message}`);
-        logger.info(
-          "Kemungkinan penyebab: API key salah/kadaluarsa, endpoint tidak bisa diakses, model ID tidak valid/tidak ada, atau CLI belum login."
-        );
-      }
-      process.exit(1);
+      const aiff = path.join(tmpDir, "tes.aiff");
+      const sayRes = spawnSync("say", ["-v", "Damayanti", "-o", aiff, "Dian menyampaikan bahwa Fajar akan mengecek ulang hasil notulen paling lambat hari Jumat."]);
+      const ff = sayRes.status === 0
+        ? spawnSync("ffmpeg", ["-y", "-i", aiff, "-ar", "16000", "-ac", "1", wav], { stdio: "ignore" })
+        : null;
+      audioReady = !!ff && ff.status === 0 && fs.existsSync(wav);
+      if (!audioReady) audioError = "Gagal membuat audio uji (perintah 'say'/ffmpeg tidak tersedia).";
+    } catch (e) {
+      audioError = `Gagal membuat audio uji: ${e.message}`;
     }
 
-    const elapsedSeconds = Math.round(((Date.now() - start) / 1000) * 10) / 10;
-    const raw = JSON.stringify(result).toLowerCase();
-
-    // Pola kegagalan nyata yang pernah terjadi: model mengembalikan teks instruksi/placeholder
-    // dari system prompt mentah-mentah ("judul singkat rapat", "nama peserta", dst), bukan
-    // hasil ekstraksi transkrip - biasanya tanda model terlalu lemah untuk tugas ini.
-    const placeholderHit = raw.includes("judul singkat rapat") || raw.includes("nama peserta");
-    if (placeholderHit) {
-      if (jsonMode) {
-        console.log(JSON.stringify({ ok: false, stage: "placeholder", elapsedSeconds, providerLabel }));
-      } else {
-        logger.error(
-          "GAGAL: model mengembalikan teks placeholder mentah dari instruksi, bukan hasil ekstraksi transkrip asli."
-        );
-        logger.info("Model ini kemungkinan tidak cukup mampu mengikuti instruksi JSON terstruktur - coba model lain.");
+    const audioMarkers = ["dian", "fajar", "jumat"];
+    for (const { role, name, kind } of transcribeRoles) {
+      const label = transcribeLabel(name, kind);
+      if (!audioReady) {
+        record({ role, label, ok: false, error: audioError });
+        continue;
       }
-      process.exit(1);
+      const start = Date.now();
+      try {
+        const text = await withTimeout(testTranscribeProvider(name, wav, kind), 240000, "provider transkripsi");
+        const elapsedSeconds = Math.round(((Date.now() - start) / 1000) * 10) / 10;
+        const low = text.toLowerCase();
+        const found = audioMarkers.filter((m) => low.includes(m));
+        if (!text.trim()) {
+          record({ role, label, ok: false, elapsedSeconds, error: "Provider mengembalikan transkrip kosong." });
+        } else {
+          record({
+            role, label, ok: true, elapsedSeconds,
+            note: found.length >= 2
+              ? `transkrip terverifikasi (${found.join(", ")})`
+              : `PERINGATAN: hanya ${found.length}/3 kata kunci terbaca - "${text.trim().slice(0, 70)}"`,
+            warn: found.length < 2,
+          });
+        }
+      } catch (err) {
+        record({
+          role, label, ok: false,
+          elapsedSeconds: Math.round(((Date.now() - start) / 1000) * 10) / 10,
+          error: err.message.replace(/\s+/g, " ").slice(0, 400),
+        });
+      }
     }
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (e) {}
 
-    const markersFound = markers.filter((m) => raw.includes(m));
-
+    const allOk = results.every((r) => r.ok);
+    const anyWarn = results.some((r) => r.ok && r.warn);
     if (jsonMode) {
-      console.log(JSON.stringify({ ok: true, elapsedSeconds, markersFound, providerLabel }));
-      return;
-    }
-
-    logger.success(`Respons diterima dalam ${elapsedSeconds} detik, format JSON valid.`);
-    if (markersFound.length === 0) {
-      logger.warn(
-        "PERINGATAN: respons valid tapi tidak menyebut satupun detail dari transkrip tes (nama/hari yang disisipkan) - model mungkin mengarang konten, bukan benar-benar membaca transkrip. Waspada saat dipakai untuk meeting asli."
-      );
+      console.log(JSON.stringify({ ok: allOk, warn: anyWarn, results, claudeWarning }));
     } else {
-      logger.success(`Konten terverifikasi mengikuti isi transkrip tes (ditemukan: ${markersFound.join(", ")}).`);
+      if (claudeWarning) logger.warn(claudeWarning);
+      logger.info(
+        allOk
+          ? anyWarn ? "Semua provider merespons, tapi ada peringatan di atas." : "Semua provider/model berjalan normal."
+          : `${results.filter((r) => !r.ok).length} dari ${results.length} tes GAGAL - lihat detail di atas.`
+      );
     }
-    logger.success("Provider/model ini siap dipakai untuk notulen.");
+    if (!allOk) process.exitCode = 1;
   });
 
 program

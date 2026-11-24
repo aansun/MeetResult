@@ -4,6 +4,8 @@ const path = require("path");
 const config = require("../config/config");
 const logger = require("../utils/logger");
 const { recordAlert } = require("../utils/alerts");
+const { isTransientProviderError, isAuthProviderError, authHint } = require("../utils/providerErrors");
+const { resolveClaudeBinary } = require("../utils/claudeBin");
 const { saveMomDocx } = require("./docxGenerator");
 const { renderFromTemplate } = require("./docxTemplateRenderer");
 const { buildUniqueFileName, monthSubdir, summaryJsonPathFor } = require("../utils/filename");
@@ -114,25 +116,63 @@ async function callProvider(providerName, systemPrompt, userPrompt) {
 }
 
 /**
- * Kirim prompt ke provider AI yang aktif (Claude CLI/API, OpenAI-compatible, atau Antigravity
- * CLI) dan kembalikan teks respons mentah. Dipakai baik oleh requestMomFromAI() (ekstraksi
- * awal) maupun polishMomLanguage() (penghalusan bahasa, lihat di bawah).
- *
- * Kalau provider utama gagal (error teknis, kuota habis, dll) DAN SUMMARY_FALLBACK_PROVIDER
- * diisi, otomatis dicoba ulang lewat provider fallback tersebut sebelum benar-benar gagal -
- * supaya notulen tetap bisa dibuat walau 1 provider sedang bermasalah.
+ * Panggil 1 provider + validasi hasilnya sebagai SATU unit (`validate` melempar kalau respons
+ * tidak layak, mis. kosong atau bukan JSON). Respons kosong/tak valid dianggap GAGAL supaya
+ * fallback ikut jalan - dulu agy yang keluar sukses tapi kosong lolos begitu saja dan baru
+ * meledak sebagai "Gagal parse JSON" tanpa pernah mencoba fallback. Gangguan sementara
+ * (jaringan/503/kosong) diulang sekali setelah jeda; login/kuota habis langsung gagal.
  */
-async function askAI(systemPrompt, userPrompt) {
+async function callProviderChecked(providerName, systemPrompt, userPrompt, validate) {
+  const { transientRetries, transientRetryDelayMs } = config.ai;
+  let lastErr;
+  for (let attempt = 0; attempt <= transientRetries; attempt++) {
+    try {
+      const text = await callProvider(providerName, systemPrompt, userPrompt);
+      if (!text || !String(text).trim()) {
+        throw new Error(`Provider '${providerName}' mengembalikan respons kosong`);
+      }
+      return validate ? validate(text) : text;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === transientRetries || !isTransientProviderError(err.message)) break;
+      logger.warn(
+        `Provider '${providerName}' gagal sementara (${err.message.replace(/\s+/g, " ").slice(0, 160)}) - mencoba lagi dalam ${Math.round(
+          transientRetryDelayMs / 1000
+        )} detik...`
+      );
+      await new Promise((r) => setTimeout(r, transientRetryDelayMs));
+    }
+  }
+  if (isAuthProviderError(lastErr.message)) {
+    const claudeBin = providerName === "claude" ? resolveClaudeBinary() : null;
+    const hint = authHint(providerName, claudeBin);
+    lastErr.message = `${lastErr.message.replace(/\s+/g, " ").trim().slice(0, 240)} -> ${hint}`;
+    recordAlert({ level: "error", kind: "notulen", message: `Provider '${providerName}' butuh login ulang. ${hint}` });
+  }
+  throw lastErr;
+}
+
+/**
+ * Kirim prompt ke provider AI yang aktif (Claude CLI/API, OpenAI-compatible, atau Antigravity
+ * CLI) dan kembalikan hasilnya (teks mentah, atau hasil `validate` kalau diberikan). Dipakai
+ * baik oleh requestMomFromAI() (ekstraksi awal, validate = extractJson) maupun
+ * polishMomLanguage() (penghalusan bahasa, lihat di bawah).
+ *
+ * Kalau provider utama gagal (error teknis, kuota habis, respons kosong/tak valid) DAN
+ * SUMMARY_FALLBACK_PROVIDER diisi, otomatis dicoba lewat provider fallback tersebut sebelum
+ * benar-benar gagal - supaya notulen tetap bisa dibuat walau 1 provider sedang bermasalah.
+ */
+async function askAI(systemPrompt, userPrompt, validate) {
   const primary = config.ai.provider;
   try {
-    return await callProvider(primary, systemPrompt, userPrompt);
+    return await callProviderChecked(primary, systemPrompt, userPrompt, validate);
   } catch (err) {
     const fallback = config.ai.fallbackProvider;
     if (!fallback || fallback === primary) throw err;
 
     logger.warn(`Provider AI notulen '${primary}' gagal (${err.message}) - mencoba fallback '${fallback}'...`);
     try {
-      const result = await callProvider(fallback, systemPrompt, userPrompt);
+      const result = await callProviderChecked(fallback, systemPrompt, userPrompt, validate);
       recordAlert({
         level: "warning",
         kind: "notulen",
@@ -147,9 +187,11 @@ async function askAI(systemPrompt, userPrompt) {
   }
 }
 
-async function requestMomFromAI(transcriptText, meetingMeta = {}) {
+async function requestMomFromAI(transcriptText, meetingMeta = {}, opts = {}) {
   const schema = getSchema();
-  const provider = config.ai.provider;
+  // opts.providerOnly: panggil HANYA provider itu tanpa fallback (dipakai tes Pengaturan supaya
+  // tiap provider diuji sendiri-sendiri, bukan diselamatkan diam-diam oleh fallback-nya).
+  const provider = opts.providerOnly || config.ai.provider;
   const providerDetail = provider === "claude" ? `claude/${config.claude.mode}` : provider;
 
   logger.info(
@@ -157,8 +199,11 @@ async function requestMomFromAI(transcriptText, meetingMeta = {}) {
   );
 
   const userPrompt = schema.buildUserPrompt(transcriptText, meetingMeta);
-  const text = await askAI(schema.SYSTEM_PROMPT, userPrompt);
-  return extractJson(text);
+  if (opts.providerOnly) {
+    return callProviderChecked(opts.providerOnly, schema.SYSTEM_PROMPT, userPrompt, extractJson);
+  }
+  // Validasi JSON di dalam askAI: respons yang bukan JSON ikut memicu fallback.
+  return askAI(schema.SYSTEM_PROMPT, userPrompt, extractJson);
 }
 
 const POLISH_SYSTEM_PROMPT = `Kamu adalah editor bahasa profesional untuk notulen rapat korporat berbahasa Indonesia.

@@ -34,8 +34,28 @@ function askAgyCli(fullPrompt) {
     let stdout = "";
     let stderr = "";
 
-    proc.stdout.on("data", (d) => (stdout += d.toString()));
-    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    let authFailed = false;
+    const watchForAuthPrompt = () => {
+      // agy yang login-nya habis tidak langsung gagal: ia menampilkan URL login Google lalu
+      // MENUNGGU 60 detik input yang tidak akan pernah datang (watcher jalan di latar belakang).
+      // Begitu prompt itu muncul, matikan langsung & gagal cepat dengan pesan yang jelas.
+      if (authFailed || !/Authentication required/i.test(stdout + stderr)) return;
+      authFailed = true;
+      proc.kill("SIGKILL");
+      reject(
+        new Error(
+          "Antigravity CLI meminta login ulang (Authentication required) - sesi login Google habis."
+        )
+      );
+    };
+    proc.stdout.on("data", (d) => {
+      stdout += d.toString();
+      watchForAuthPrompt();
+    });
+    proc.stderr.on("data", (d) => {
+      stderr += d.toString();
+      watchForAuthPrompt();
+    });
 
     proc.on("error", (err) => {
       reject(
@@ -46,6 +66,7 @@ function askAgyCli(fullPrompt) {
     });
 
     proc.on("close", (code) => {
+      if (authFailed) return;
       if (code !== 0) {
         return reject(new Error(`Antigravity CLI keluar dengan kode error ${code}. ${stderr || ""}`));
       }
